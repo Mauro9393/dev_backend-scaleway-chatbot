@@ -24,11 +24,11 @@ jobs:
       - name: Setup Scaleway CLI
         uses: scaleway/action-scw@v0
         with:
-          access_key: ${{ secrets.SCW_ACCESS_KEY }}
-          secret_key: ${{ secrets.SCW_SECRET_KEY }}
-          default_organization_id: ${{ secrets.SCW_DEFAULT_ORGANIZATION_ID }}
-          default_project_id: ${{ secrets.SCW_DEFAULT_PROJECT_ID }}
-          default_region: ${{ secrets.SCW_DEFAULT_REGION }}
+        access-key: ${{ secrets.SCW_ACCESS_KEY }}
+        secret-key: ${{ secrets.SCW_SECRET_KEY }}
+        default-organization-id: ${{ secrets.SCW_DEFAULT_ORGANIZATION_ID }}
+        default-project-id: ${{ secrets.SCW_DEFAULT_PROJECT_ID }}
+        default-region: ${{ secrets.SCW_DEFAULT_REGION }}
 
       - name: Login to Scaleway Container Registry (docker)
         run: echo "${{ secrets.SCW_SECRET_KEY }}" | docker login ${{ env.REGISTRY_ENDPOINT }} -u "${{ secrets.SCW_ACCESS_KEY }}" --password-stdin
