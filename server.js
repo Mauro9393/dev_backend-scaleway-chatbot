@@ -22,6 +22,15 @@ const AZ_KEY = process.env.AZURE_REALTIME_OPENAI_API_KEY;          // KEY1/KEY2
 const AZ_DEPLOY = process.env.AZURE_REALTIME_OPENAI_REALTIME_DEPLOYMENT; // nome deployment (NON il nome del modello)
 const AZ_VER = process.env.AZURE_REALTIME_OPENAI_API_VERSION || "2025-04-01-preview";
 
+// Dizionario pronunce per TTS (audio)
+function applySpeechDictionary(s = "") {
+  return String(s)
+    // E.Leclerc / E Leclerc / e.Leclerc → "Leclerc"
+    .replace(/\bE\.?\s?Leclerc\b/gi, "Leclerc")
+    // Tickets → "Tiqué"
+    .replace(/\bTickets\b/g, "Tiqu\u00E9");
+}
+
 
 /* ----------------------------- START --------------------------*/
 
@@ -613,7 +622,7 @@ app.post("/api/:service", upload.none(), async (req, res) => {
             const voice = (selectedVoice && selectedVoice.trim()) || voiceMap[lang] || "fr-FR-RemyMultilingualNeural";
 
             const ssml = buildSSML({
-                text,
+                text: applySpeechDictionary(text),
                 voice
             });
 
@@ -689,7 +698,7 @@ app.post("/api/:service", upload.none(), async (req, res) => {
             const lang = (selectedLanguage || "").trim().toLowerCase();
             const voice = (selectedVoice && selectedVoice.trim()) || voiceMap[lang] || "fr-FR-RemyMultilingualNeural";
 
-            const ssml = buildSSML({ text, voice });
+            const ssml = buildSSML({ text: applySpeechDictionary(text), voice });
             const contentType = wantedFormat === "webm" ? "audio/webm" : "audio/mpeg";
 
             const ok = enqueueTtsJob(wantedFormat, { ssml, res, req, contentType });
@@ -1427,7 +1436,7 @@ wss.on("connection", (clientWs, req) => {
 
             if (rid && chunk) {
                 const el = elevenByResp.get(rid);
-                if (el) el.sendText(chunk);
+                if (el) el.sendText(applySpeechDictionary(chunk));
             }
             return;
         }
