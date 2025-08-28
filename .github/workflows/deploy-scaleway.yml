@@ -5,22 +5,22 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
 
-env:
-  REGION: ${{ secrets.SCW_DEFAULT_REGION }}
-  REGISTRY_ENDPOINT: rg.${{ secrets.SCW_DEFAULT_REGION }}.scw.cloud
-  REGISTRY_NAMESPACE: ${{ secrets.SCW_REGISTRY_NAMESPACE }}
-  IMAGE_NAME: chatbot-backend
-  IMAGE_TAG: sha-${{ github.sha }}
-  IMAGE_URI: rg.${{ secrets.SCW_DEFAULT_REGION }}.scw.cloud/${{ secrets.SCW_REGISTRY_NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
+    env:
+      REGION: ${{ secrets.SCW_DEFAULT_REGION }}
+      REGISTRY_ENDPOINT: rg.${{ secrets.SCW_DEFAULT_REGION }}.scw.cloud
+      REGISTRY_NAMESPACE: ${{ secrets.SCW_REGISTRY_NAMESPACE }}
+      IMAGE_NAME: chatbot-backend
+      IMAGE_TAG: sha-${{ github.sha }}
+      IMAGE_URI: rg.${{ secrets.SCW_DEFAULT_REGION }}.scw.cloud/${{ secrets.SCW_REGISTRY_NAMESPACE }}/chatbot-backend:sha-${{ github.sha }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Configura la CLI Scaleway usando i tuoi SCW_* secrets
       - name: Setup Scaleway CLI
         uses: scaleway/action-scw@v0.5
         with:
@@ -30,25 +30,22 @@ jobs:
           default_project_id: ${{ secrets.SCW_DEFAULT_PROJECT_ID }}
           default_region: ${{ secrets.SCW_DEFAULT_REGION }}
 
-      # Login al Container Registry (usa la CLI già configurata sopra)
       - name: Login to Scaleway Container Registry
         run: scw registry login
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Build & Push: pushiamo sia il tag immutabile "sha-<commit>" sia "latest"
       - name: Build and push image
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
+          platforms: linux/amd64
           tags: |
             ${{ env.IMAGE_URI }}
-            ${{ env.REGISTRY_ENDPOINT }}/${{ secrets.SCW_REGISTRY_NAMESPACE }}/${{ env.IMAGE_NAME }}:latest
-          platforms: linux/amd64
+            ${{ env.REGISTRY_ENDPOINT }}/${{ env.REGISTRY_NAMESPACE }}/${{ env.IMAGE_NAME }}:latest
 
-      # Aggiorna il container alla nuova immagine e ridistribuisci
       - name: Update container image and deploy
         run: |
           scw container container update \
