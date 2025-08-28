@@ -22,7 +22,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Scaleway CLI
-        uses: scaleway/action-scw@v0.5
+        uses: scaleway/action-scw@v0
         with:
           access_key: ${{ secrets.SCW_ACCESS_KEY }}
           secret_key: ${{ secrets.SCW_SECRET_KEY }}
