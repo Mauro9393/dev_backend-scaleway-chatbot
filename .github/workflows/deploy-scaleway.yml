@@ -1,42 +1,59 @@
-name: CI/CD → Scaleway
+name: Deploy to Scaleway Serverless Containers
 
 on:
   push:
-    branches:
-      - main
+    branches: [ "main" ]
+  workflow_dispatch:
+
+env:
+  REGION: ${{ secrets.SCW_DEFAULT_REGION }}
+  REGISTRY_ENDPOINT: rg.${{ secrets.SCW_DEFAULT_REGION }}.scw.cloud
+  REGISTRY_NAMESPACE: ${{ secrets.SCW_REGISTRY_NAMESPACE }}
+  IMAGE_NAME: chatbot-backend
+  IMAGE_TAG: sha-${{ github.sha }}
+  IMAGE_URI: rg.${{ secrets.SCW_DEFAULT_REGION }}.scw.cloud/${{ secrets.SCW_REGISTRY_NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
 
 jobs:
-  build_and_deploy:
+  deploy:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout codice
-        uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Configura la CLI Scaleway usando i tuoi SCW_* secrets
+      - name: Setup Scaleway CLI
+        uses: scaleway/action-scw@v0.5
+        with:
+          access_key: ${{ secrets.SCW_ACCESS_KEY }}
+          secret_key: ${{ secrets.SCW_SECRET_KEY }}
+          default_organization_id: ${{ secrets.SCW_DEFAULT_ORGANIZATION_ID }}
+          default_project_id: ${{ secrets.SCW_DEFAULT_PROJECT_ID }}
+          default_region: ${{ secrets.SCW_DEFAULT_REGION }}
+
+      # Login al Container Registry (usa la CLI già configurata sopra)
+      - name: Login to Scaleway Container Registry
+        run: scw registry login
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
 
-      - name: Login a Scaleway Registry
-        run: |
-          echo "${{ secrets.SCALEWAY_SECRET_KEY }}" \
-            | docker login rg.fr-par.scw.cloud \
-                -u "${{ secrets.SCALEWAY_ACCESS_KEY }}" \
-                --password-stdin
-
-      - name: Build & Push Docker image
-        id: build_and_push
-        run: |
-          IMAGE="rg.fr-par.scw.cloud/${{ secrets.SCALEWAY_REGISTRY_NAMESPACE }}/chatbot-backend:latest"
-          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
-          docker build --platform linux/amd64 -t $IMAGE .
-          docker push $IMAGE
-
-      - name: Redeploy su Scaleway Serverless Container
-        uses: httptoolkit/deploy-scaleway-serverless-container-action@v1
+      # Build & Push: pushiamo sia il tag immutabile "sha-<commit>" sia "latest"
+      - name: Build and push image
+        uses: docker/build-push-action@v5
         with:
-          container_id:      ${{ secrets.SCALEWAY_CONTAINER_ID }}
-          secret_key:        ${{ secrets.SCALEWAY_SECRET_KEY }}
-          registry_image_url: ${{ env.IMAGE }}
-          timeout_seconds:     300
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE_URI }}
+            ${{ env.REGISTRY_ENDPOINT }}/${{ secrets.SCW_REGISTRY_NAMESPACE }}/${{ env.IMAGE_NAME }}:latest
+          platforms: linux/amd64
 
-           
+      # Aggiorna il container alla nuova immagine e ridistribuisci
+      - name: Update container image and deploy
+        run: |
+          scw container container update \
+            container-id=${{ secrets.SCW_CONTAINER_ID }} \
+            registry-image=${{ env.IMAGE_URI }} \
+            port=8080 \
+            protocol=http1
+          scw container container deploy container-id=${{ secrets.SCW_CONTAINER_ID }}
