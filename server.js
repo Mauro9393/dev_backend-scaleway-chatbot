@@ -24,11 +24,11 @@ const AZ_VER = process.env.AZURE_REALTIME_OPENAI_API_VERSION || "2025-04-01-prev
 
 // Dizionario pronunce per TTS (audio)
 function applySpeechDictionary(s = "") {
-  return String(s)
-    // E.Leclerc / E Leclerc / e.Leclerc → "Leclerc"
-    .replace(/\bE\.?\s?Leclerc\b/gi, "Leclerc")
-    // Tickets → "Tiqué"
-    .replace(/\bTickets\b/g, "Tiqu\u00E9");
+    return String(s)
+        // E.Leclerc / E Leclerc / e.Leclerc → "Leclerc"
+        .replace(/\bE\.?\s?Leclerc\b/gi, "Leclerc")
+        // Tickets → "Tiqué"
+        .replace(/\bTickets\b/g, "Tiqu\u00E9");
 }
 
 
@@ -823,6 +823,37 @@ app.post("/api/:service", upload.none(), async (req, res) => {
                     .header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
                     .header("Access-Control-Allow-Headers", "Content-Type")
                     .json({ error: err.message });
+            }
+        }
+
+        else if (service === "updateUserReview") {
+            const { userID, stars, review } = req.body;
+
+            try {
+                const result = await pool.query(
+                    `UPDATE userlist
+                    SET stars = $1, review = $2
+                    WHERE id = (
+                    SELECT id FROM userlist 
+                    WHERE user_email = $3
+                    ORDER BY created_at DESC NULLS LAST, id DESC
+                    LIMIT 1
+                    )
+                    RETURNING *`,
+                    [stars, review, userID]
+                );
+
+                return res
+                    .status(200)
+                    .header("Access-Control-Allow-Origin", "*")
+                    .json({
+                        message: "Recensione aggiornata!",
+                        count: result.rowCount,
+                        data: result.rows[0]
+                    });
+            } catch (err) {
+                console.error("❌ Errore aggiornamento recensione:", err);
+                res.status(500).json({ error: err.message });
             }
         }
 
