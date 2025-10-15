@@ -10,26 +10,30 @@ const fs = require("fs");
 const path = require("path");
 const { VertexAI } = require("@google-cloud/vertexai");
 const { Pool } = require('pg');
-
 const sdk = require("microsoft-cognitiveservices-speech-sdk");
-
-
 const WebSocket = require("ws");
 const http = require("http");
+
+const crypto = require('crypto');
+const ALGO = 'aes-256-gcm';
+const KEY = Buffer.from(process.env.API_KEYS_MASTER_KEY || '', 'base64');
+if (!KEY || KEY.length !== 32) throw new Error('API_KEYS_MASTER_KEY invalida (32 bytes base64)');
+
+function decryptSecret(b64) {
+    const buf = Buffer.from(b64, 'base64');
+    const iv = buf.subarray(0, 12);
+    const tag = buf.subarray(12, 28);
+    const ct = buf.subarray(28);
+    const decipher = crypto.createDecipheriv(ALGO, KEY, iv);
+    decipher.setAuthTag(tag);
+    const plain = Buffer.concat([decipher.update(ct), decipher.final()]);
+    return plain.toString('utf8');
+}
 
 const AZ_ENDPOINT = process.env.AZURE_REALTIME_OPENAI_ENDPOINT;          // es. https://2707llm.openai.azure.com
 const AZ_KEY = process.env.AZURE_REALTIME_OPENAI_API_KEY;          // KEY1/KEY2
 const AZ_DEPLOY = process.env.AZURE_REALTIME_OPENAI_REALTIME_DEPLOYMENT; // nome deployment (NON il nome del modello)
 const AZ_VER = process.env.AZURE_REALTIME_OPENAI_API_VERSION || "2025-04-01-preview";
-
-// Dizionario pronunce per TTS (audio)
-function applySpeechDictionary(s = "") {
-    return String(s)
-        // E.Leclerc / E Leclerc / e.Leclerc → "Leclerc"
-        .replace(/\bE\.?\s?Leclerc\b/gi, "Leclerc")
-        // Tickets → "Tiqué"
-        .replace(/\bTickets\b/g, "Tiqu\u00E9");
-}
 
 
 /* ----------------------------- START --------------------------*/
@@ -280,6 +284,7 @@ process.env.GOOGLE_APPLICATION_CREDENTIALS = keyPath;
 
 // OpenAI SDK
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY_SIMULATEUR });
+const openaiCreps = new OpenAI({ apiKey: process.env.OPENAI_API_KEY_SIMULATEUR });
 
 // Vertex AI setup
 const vertexAI = new VertexAI({
@@ -295,11 +300,18 @@ const vertexModel = vertexAI.getGenerativeModel({
 const API_TIMEOUT = 320000; // 5 minutes
 const axiosInstance = axios.create({ timeout: API_TIMEOUT });
 
+// --- HeyGen axios ---
+const heygen = axios.create({
+    baseURL: "https://api.heygen.com",
+    timeout: API_TIMEOUT,
+    headers: { "X-Api-Key": process.env.HEYGEN_API_KEY }
+});
+
 // Global middlewares
 app.use(cors({
     origin: "*",
     methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type"]
+    allowedHeaders: ["Content-Type", "x-user-api-key", "authorization", "x-user-id", "x-user-email", "x-chatbot-id", "x-timer-chatbot-id"]
 }));
 app.use(express.json());
 
@@ -311,6 +323,99 @@ const pool = new Pool({
         ca: process.env.PG_SSL_CA
     }
 });
+
+// START to set code with timer fot chatbot for service openaiSimulateur and azureOpenaiNotStream
+// ================== TIMER PER-ID (IN-MEMORY) ==================
+const THREE_YEARS = 3 * 365 * 24 * 60 * 60 * 1000;
+// Summer + 2h - Winter + 1h
+const TIMER_ID_POLICY = {
+    //  Day * hr * mn * Sec* Ml (7 * 24 * 60 * 60 * 1000)
+    "testTimer": {
+        ttlMs: THREE_YEARS,
+        sliding: false,
+        hardStopAt: "2025-10-09T18:00:00Z"
+    }
+};
+
+// Stato runtime: timerId -> { expiresAt:number }
+const runtimeTimers = new Map();
+const expiredSticky = new Set();
+const REQUIRE_TIMER_ID = true;
+
+function getTimerId(req) {
+    // SOLO variabile "timer_chatbot_id" (body / query / header)
+    return (
+        req.body?.timer_chatbot_id ||
+        req.query?.timer_chatbot_id ||
+        req.get("x-timer-chatbot-id") ||
+        ""
+    ).toString().trim();
+}
+function getTimerPolicy(id) { return id ? TIMER_ID_POLICY[id] : null; }
+const now = () => Date.now();
+
+function ensureTimerSession(id) {
+    const pol = getTimerPolicy(id);
+    if (!pol) return null;               // id non gestito → nessun timer applicato
+    if (expiredSticky.has(id)) {
+        // Mantieni un record con expiresAt=0 così remaining=0
+        let s = runtimeTimers.get(id);
+        if (!s) { s = { expiresAt: 0 }; runtimeTimers.set(id, s); }
+        return s;
+    }
+
+    let s = runtimeTimers.get(id);
+    const ttl = Number(pol.ttlMs || 0);
+    const hardStopAt = pol.hardStopAt ? new Date(pol.hardStopAt).getTime() : null;
+
+    if (!s) {
+        const base = ttl > 0 ? now() + ttl : now();
+        const expiresAt = hardStopAt ? (isNaN(hardStopAt) ? base : Math.min(base, hardStopAt)) : base;
+        s = { expiresAt };
+        runtimeTimers.set(id, s);
+    } else if (pol.sliding && ttl > 0 && s.expiresAt > now()) {
+        const renewed = now() + ttl;
+        s.expiresAt = hardStopAt ? Math.min(renewed, hardStopAt) : renewed;
+    }
+    return s;
+}
+
+function remainingTimerMs(id) {
+    const s = runtimeTimers.get(id);
+    return s ? Math.max(0, s.expiresAt - now()) : Infinity; // Infinity = nessun limite (id non in policy)
+}
+function isTimerExpired(id) {
+    const pol = getTimerPolicy(id);
+    if (!pol) return false; // id non gestito → non scade mai
+    const rem = remainingTimerMs(id);
+    const expired = rem <= 0;
+    if (expired) {
+        expiredSticky.add(id);       // non permettere ricreazione
+        runtimeTimers.set(id, { expiresAt: 0 }); // garantisci remaining=0
+    }
+    return expired;
+}
+
+function rejectJsonTimer(res, id, reason = "session_expired", status = 403) {
+    if (id) { expiredSticky.add(id); runtimeTimers.set(id, { expiresAt: 0 }); }
+    res.status(status)
+        .setHeader("Access-Control-Allow-Origin", "*")
+        .setHeader("Access-Control-Expose-Headers", "X-Session-Remaining")
+        .setHeader("X-Session-Remaining", "0")
+        .json({ ok: false, error: reason, timer_chatbot_id: id, remaining_ms: 0 });
+}
+
+function rejectSSETimer(res, id, reason = "session_expired") {
+    if (id) { expiredSticky.add(id); runtimeTimers.set(id, { expiresAt: 0 }); }
+    try {
+        res.write(`data: ${JSON.stringify({ error: true, message: reason, timer_chatbot_id: id, remaining_ms: 0 })}\n\n`);
+        res.write("data: [DONE]\n\n");
+    } finally {
+        res.end();
+    }
+}
+
+// END to set code with timer fot chatbot for service openaiSimulateur and azureOpenaiNotStream
 
 // SSE helper for OpenAI Threads
 async function streamAssistant(assistantId, messages, userId, res) {
@@ -376,45 +481,207 @@ app.post("/api/:service", upload.none(), async (req, res) => {
     console.log("🔹 Dati ricevuti:", JSON.stringify(req.body));
     try {
 
-        // RIMUOVERE
-        // Azure OpenAI Chat (Simulator) — NON STREAM
+        // Azure OpenAI Chat (Simulator)
         if (service === "azureOpenai") {
             const apiKey = process.env.AZURE_OPENAI_KEY_SIMULATEUR;
             const endpoint = process.env.AZURE_OPENAI_ENDPOINT_SIMULATEUR;
             const deployment = process.env.AZURE_OPENAI_DEPLOYMENT_SIMULATEUR;
-            const apiVersion = process.env.AZURE_OPENAI_API_VERSION;
+            const apiVersion = process.env.AZURE_OPENAI_API_VERSION || "2024-08-01-preview";
 
             const apiUrl = `${endpoint}/openai/deployments/${deployment}/chat/completions?api-version=${apiVersion}`;
 
-            // Prendiamo i campi dal body e forziamo stream: false
+            // headers SSE
+            res.setHeader("Access-Control-Allow-Origin", "*");
+            res.setHeader("Content-Type", "text/event-stream");
+            res.setHeader("Cache-Control", "no-cache");
+            res.setHeader("Connection", "keep-alive");
+            res.setHeader("X-Accel-Buffering", "no");
+            res.flushHeaders();
+
             const { messages, temperature, max_tokens, top_p, frequency_penalty, presence_penalty } = req.body || {};
             const payload = {
                 messages: messages || [],
-                stream: false, // Disattiva streaming lato Azure
+                stream: true,
                 ...(temperature !== undefined ? { temperature } : {}),
                 ...(max_tokens !== undefined ? { max_tokens } : {}),
                 ...(top_p !== undefined ? { top_p } : {}),
                 ...(frequency_penalty !== undefined ? { frequency_penalty } : {}),
-                ...(presence_penalty !== undefined ? { presence_penalty } : {})
+                ...(presence_penalty !== undefined ? { presence_penalty } : {}),
             };
 
             try {
-                const response = await axiosInstance.post(apiUrl, payload, {
-                    headers: { "api-key": apiKey, "Content-Type": "application/json" }
+                const axiosResp = await axiosInstance.post(apiUrl, payload, {
+                    headers: { "api-key": apiKey, "Content-Type": "application/json" },
+                    responseType: "stream",
+                    // importantissimo con SSE dietro proxy:
+                    decompress: true,
+                    transitional: { clarifyTimeoutError: true }
                 });
 
-                // CORS e JSON standard
-                res.setHeader("Access-Control-Allow-Origin", "*");
-                res.setHeader("Content-Type", "application/json");
-                return res.status(200).send(response.data);
+                axiosResp.data.on("data", (chunk) => {
+                    res.write(chunk.toString("utf8")); // passthrough 1:1 (Azure manda già "data: ...\n\n")
+                });
+                axiosResp.data.on("end", () => res.end());
+                axiosResp.data.on("error", (e) => {
+                    console.error("Azure SSE stream error:", e?.message || e);
+                    res.write(`data: ${JSON.stringify({ error: true, message: "stream_error", details: String(e) })}\n\n`);
+                    res.write("data: [DONE]\n\n");
+                    res.end();
+                });
+
             } catch (err) {
-                console.error("❌ Azure Simulateur (non-stream) error:", err.response?.data || err.message);
-                return res.status(err.response?.status || 500)
-                    .json(err.response?.data || { error: "Errore interno azureOpenaiSimulateur" });
+                const status = err?.response?.status || 500;
+                const headers = err?.response?.headers || {};
+                const requestId = headers["x-request-id"] || headers["x-ms-request-id"] || headers["apim-request-id"] || "";
+
+                let body = err?.response?.data;
+                if (Buffer.isBuffer(body)) { try { body = body.toString("utf8"); } catch { body = "<buffer>"; } }
+                if (typeof body === "object") { try { body = JSON.stringify(body); } catch { } }
+
+                console.error("❌ Azure SSE error:", { status, requestId, body });
+
+                // Invia i DETTAGLI al client come SSE "data: ..."
+                res.write(`data: ${JSON.stringify({
+                    error: true,
+                    message: "azureOpenai error",
+                    status,
+                    requestId,
+                    details: body || null
+                })}\n\n`);
+                res.write("data: [DONE]\n\n");
+                res.end();
             }
         }
 
-        // Vertex Chat (batch + streaming)
+        else if (service === "azureOpenaiNotStream") {
+            const apiKey = process.env.AZURE_OPENAI_KEY_SIMULATEUR;
+            const endpoint = process.env.AZURE_OPENAI_ENDPOINT_SIMULATEUR;
+            const deployment = process.env.AZURE_OPENAI_DEPLOYMENT_SIMULATEUR;
+            const apiVersion = process.env.AZURE_OPENAI_API_VERSION || "2024-11-20";
+
+            const apiUrl = `${endpoint}/openai/deployments/${deployment}/chat/completions?api-version=${apiVersion}`;
+
+            const { messages, temperature, max_tokens, top_p, frequency_penalty, presence_penalty } = req.body || {};
+            const payload = {
+                messages: messages || [],
+                stream: false, // ⬅️ importante
+                ...(temperature !== undefined ? { temperature } : {}),
+                ...(max_tokens !== undefined ? { max_tokens } : {}),
+                ...(top_p !== undefined ? { top_p } : {}),
+                ...(frequency_penalty !== undefined ? { frequency_penalty } : {}),
+                ...(presence_penalty !== undefined ? { presence_penalty } : {}),
+            };
+
+            try {
+                const { data } = await axiosInstance.post(apiUrl, payload, {
+                    headers: { "api-key": apiKey, "Content-Type": "application/json" },
+                });
+
+                // Estraggo il testo in modo robusto (stringa o array di parti)
+                let content = "";
+                const choice = data?.choices?.[0];
+                if (choice?.message?.content) {
+                    content = Array.isArray(choice.message.content)
+                        ? choice.message.content.filter(p => p.type === "text").map(p => p.text).join("")
+                        : String(choice.message.content);
+                }
+
+                return res.status(200).json({ ok: true, content, raw: data });
+            } catch (err) {
+                const status = err?.response?.status || 500;
+                const headers = err?.response?.headers || {};
+                const requestId = headers["x-request-id"] || headers["x-ms-request-id"] || headers["apim-request-id"] || "";
+                let details = err?.response?.data;
+
+                try {
+                    if (Buffer.isBuffer(details)) details = details.toString("utf8");
+                } catch { }
+
+                // una sola risposta, niente write/end multipli ⇒ niente ERR_HTTP_HEADERS_SENT
+                return res.status(status).json({
+                    ok: false,
+                    message: "azureOpenai error",
+                    status,
+                    requestId,
+                    details,
+                });
+            }
+        }
+
+        // Azure OpenAI non-stream con timer_chatbot_id
+        else if (service === "azureOpenaiNotStreamTimer") {
+            const tId = getTimerId(req);
+
+            // Richiesta di ID obbligatorio e whitelistato
+            if (REQUIRE_TIMER_ID && !tId) {
+                return rejectJsonTimer(res, tId, "missing_timer_id", 400);
+            }
+            if (REQUIRE_TIMER_ID && !getTimerPolicy(tId)) {
+                return rejectJsonTimer(res, tId, "invalid_timer_id", 403);
+            }
+
+            ensureTimerSession(tId);
+            if (tId && isTimerExpired(tId)) {
+                return rejectJsonTimer(res, tId);
+            }
+
+            const apiKey = process.env.AZURE_OPENAI_KEY_SIMULATEUR;
+            const endpoint = process.env.AZURE_OPENAI_ENDPOINT_SIMULATEUR;
+            const deployment = process.env.AZURE_OPENAI_DEPLOYMENT_SIMULATEUR;
+            const apiVersion = process.env.AZURE_OPENAI_API_VERSION || "2024-11-20";
+            const apiUrl = `${endpoint}/openai/deployments/${deployment}/chat/completions?api-version=${apiVersion}`;
+
+            const { messages, temperature, max_tokens, top_p, frequency_penalty, presence_penalty } = req.body || {};
+            const payload = {
+                messages: messages || [],
+                stream: false,
+                ...(temperature !== undefined ? { temperature } : {}),
+                ...(max_tokens !== undefined ? { max_tokens } : {}),
+                ...(top_p !== undefined ? { top_p } : {}),
+                ...(frequency_penalty !== undefined ? { frequency_penalty } : {}),
+                ...(presence_penalty !== undefined ? { presence_penalty } : {}),
+            };
+
+            try {
+                const { data } = await axiosInstance.post(apiUrl, payload, {
+                    headers: { "api-key": apiKey, "Content-Type": "application/json" },
+                });
+
+                if (getTimerPolicy(tId)) {
+                    res.setHeader("Access-Control-Allow-Origin", "*");
+                    res.setHeader("Access-Control-Expose-Headers", "X-Session-Remaining");
+                    res.setHeader("X-Session-Remaining", String(remainingTimerMs(tId)));
+                }
+
+                let content = "";
+                const choice = data?.choices?.[0];
+                if (choice?.message?.content) {
+                    content = Array.isArray(choice.message.content)
+                        ? choice.message.content.filter(p => p.type === "text").map(p => p.text).join("")
+                        : String(choice.message.content);
+                }
+
+                return res.status(200).json({ ok: true, content, raw: data });
+            } catch (err) {
+                const status = err?.response?.status || 500;
+                const headers = err?.response?.headers || {};
+                const requestId = headers["x-request-id"] || headers["x-ms-request-id"] || headers["apim-request-id"] || "";
+                let details = err?.response?.data;
+                try { if (Buffer.isBuffer(details)) details = details.toString("utf8"); } catch { }
+
+                return res.status(status).json({
+                    ok: false,
+                    message: "azureOpenai error",
+                    status,
+                    requestId,
+                    details,
+                });
+            }
+        }
+
+
+
+        // Vertex Chat (batch + streaming) 
         else if (service === "vertexChat") {
             // CORS already applied globally
             const { messages, stream = true } = req.body;
@@ -459,6 +726,87 @@ app.post("/api/:service", upload.none(), async (req, res) => {
             }
         }
 
+        // OpenAI streaming with key openai dans BD -database-
+        else if (service === "openaiSimulateurBlearn") {
+            res.setHeader("Content-Type", "text/event-stream");
+            res.setHeader("Cache-Control", "no-cache");
+            res.setHeader("Access-Control-Allow-Origin", "*");
+            res.flushHeaders();
+
+            // 1) Se presente, usa chiave passata da proxy
+            let userKey =
+                req.get("x-user-api-key") ||
+                (req.get("authorization") || "").replace(/^Bearer\s+/i, "");
+
+            try {
+                // 2) Fallback: recupera dal DB in base al chatbot_id (storyline_key) e, se disponibile, all'utente
+                if (!userKey) {
+                    const chatbotIdStr = ((req.body && req.body.chatbot_id) || req.query.chatbot_id || req.get("x-chatbot-id") || "").toString().trim();
+                    if (!chatbotIdStr) {
+                        res.write(`data: ${JSON.stringify({ error: true, message: "chatbot_id manquant" })}\n\n`);
+                        res.write("data: [DONE]\n\n"); return res.end();
+                    }
+
+                    // Opzionale: prova a identificare l'utente
+                    const userIdHdr = req.get("x-user-id");
+                    const userEmailHdr = req.get("x-user-email");
+
+                    let userIdNum = userIdHdr ? Number(userIdHdr) : null;
+                    if (!userIdNum && userEmailHdr) {
+                        const rUid = await pool.query("SELECT id FROM users WHERE user_mail = $1", [userEmailHdr]);
+                        userIdNum = rUid.rows[0]?.id || null;
+                    }
+
+                    let rKey;
+                    if (userIdNum) {
+                        // Chiave per utente + provider + chatbot_id (STRINGA = storyline_key)
+                        rKey = await pool.query(
+                            `SELECT enc_key FROM api_keys
+           WHERE user_id = $1 AND provider = 'openai' AND chatbot_id = $2
+           ORDER BY updated_at DESC LIMIT 1`,
+                            [userIdNum, chatbotIdStr]
+                        );
+                    } else {
+                        // Fallback: prendi la più recente per quel chatbot_id (se non distingui l'utente)
+                        rKey = await pool.query(
+                            `SELECT enc_key FROM api_keys
+           WHERE provider = 'openai' AND chatbot_id = $1
+           ORDER BY updated_at DESC LIMIT 1`,
+                            [chatbotIdStr]
+                        );
+                    }
+
+                    if (rKey.rows.length > 0) {
+                        try { userKey = decryptSecret(rKey.rows[0].enc_key); } catch { }
+                    }
+
+                    // Ultimo fallback (se vuoi tenerlo): env globale
+                    /*if (!userKey && !process.env.OPENAI_API_KEY_SIMULATEUR) {
+                        res.write(`data: ${JSON.stringify({ error: true, message: "Aucune clé API disponible" })}\n\n`);
+                        res.write("data: [DONE]\n\n"); return res.end();
+                    }*/
+                }
+
+                const client = userKey ? new OpenAI({ apiKey: userKey }) : openai;
+
+                // 3) Stream OpenAI identico a prima
+                const stream = await client.chat.completions.create({
+                    model: req.body.model,
+                    messages: req.body.messages,
+                    stream: true
+                });
+                for await (const part of stream) {
+                    const delta = part.choices?.[0]?.delta?.content;
+                    if (delta) res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: delta } }] })}\n\n`);
+                }
+                res.write("data: [DONE]\n\n");
+                return res.end();
+            } catch (err) {
+                res.write(`data: ${JSON.stringify({ error: true, message: err.message })}\n\n`);
+                res.write("data: [DONE]\n\n"); return res.end();
+            }
+        }
+
         // OpenAI streaming (SDK)
         else if (service === "openaiSimulateur") {
             res.setHeader("Content-Type", "text/event-stream");
@@ -481,75 +829,155 @@ app.post("/api/:service", upload.none(), async (req, res) => {
             return res.end();
         }
 
-        // OpenAI Analyse (non-stream via Threads)
-        else if (service === "assistantOpenaiAnalyse") {
-            const assistantId = process.env.OPENAI_ASSISTANTID;
-            // create thread & run, then poll until complete
-            const thread = await openai.beta.threads.create({ messages: req.body.messages });
-            const run = await openai.beta.threads.runs.create(thread.id, { assistant_id: assistantId });
-            let status;
-            do {
-                await new Promise(r => setTimeout(r, 1000));
-                status = await openai.beta.threads.runs.retrieve(thread.id, run.id);
-            } while (status.status !== "completed" && status.status !== "failed");
-            if (status.status !== "completed") {
-                return res.status(500).json({ error: "Assistant run failed", details: status.status });
-            }
-            const msgs = await openai.beta.threads.messages.list(thread.id, { limit: 1, order: "desc" });
-            const answer = msgs.data[0]?.content?.[0]?.text?.value || "";
-            return res.json({ answer });
-        }
-
-        // Assistant OpenAI Analyse Streaming
-        else if (service === "assistantOpenaiAnalyseStreaming") {
-            const assistantId = process.env.OPENAI_ASSISTANTID;
-            let thread;
-            if (req.body.threadId) {
-                thread = { id: req.body.threadId };
-                for (const msg of req.body.messages) {
-                    await openai.beta.threads.messages.create(thread.id, msg);
-                }
-            } else {
-                thread = await openai.beta.threads.create({ messages: req.body.messages });
-            }
+        else if (service === "openaiSimulateurCreps") {
             res.setHeader("Content-Type", "text/event-stream");
             res.setHeader("Cache-Control", "no-cache");
             res.flushHeaders();
-            if (!req.body.threadId) {
-                res.write(`data: ${JSON.stringify({ threadId: thread.id })}\n\n`);
+            const stream = await openaiCreps.chat.completions.create({
+                model: req.body.model,
+                messages: req.body.messages,
+                stream: true
+            });
+            for await (const part of stream) {
+                const delta = part.choices?.[0]?.delta?.content;
+                if (delta) {
+                    res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: delta } }] })}\n\n`);
+                }
             }
-            const stream = await openai.beta.threads.runs.createAndStream(thread.id, { assistant_id: assistantId, stream: true });
-            for await (const event of stream) {
-                const delta = event.data?.delta?.content;
-                if (delta) res.write(`data: ${JSON.stringify({ delta })}\n\n`);
-            }
+            const totalTokens = stream.usage?.total_tokens || 0;
+            res.write(`data: ${JSON.stringify({ usage: { total_tokens: totalTokens } })}\n\n`);
             res.write("data: [DONE]\n\n");
             return res.end();
         }
 
-        // OpenAI Analyse (chat completions non-stream)
-        else if (service === "openaiAnalyse") {
+        // OpenAI streaming (SDK) con timer_chatbot_id
+        else if (service === "openaiSimulateurTimer") {
+            // SSE headers
             res.setHeader("Content-Type", "text/event-stream");
             res.setHeader("Cache-Control", "no-cache");
             res.setHeader("Connection", "keep-alive");
             res.setHeader("Access-Control-Allow-Origin", "*");
+            res.setHeader("X-Accel-Buffering", "no");
+
+            // Timer
+            const tId = getTimerId(req);
+
+            // ID richiesto e whitelistato
+            if (REQUIRE_TIMER_ID && !tId) {
+                return rejectSSETimer(res, tId, "missing_timer_id");
+            }
+            if (REQUIRE_TIMER_ID && !getTimerPolicy(tId)) {
+                return rejectSSETimer(res, tId, "invalid_timer_id");
+            }
+
+            // Crea/aggiorna sessione; se scaduta → tombstone e chiudi
+            ensureTimerSession(tId);
+            if (tId && isTimerExpired(tId)) {
+                return rejectSSETimer(res, tId);
+            }
+
+            if (getTimerPolicy(tId)) {
+                res.setHeader("Access-Control-Expose-Headers", "X-Session-Remaining");
+                res.setHeader("X-Session-Remaining", String(remainingTimerMs(tId)));
+            }
+
             res.flushHeaders();
-            try {
-                const stream = await openai.chat.completions.create({
-                    model: req.body.model,
-                    messages: req.body.messages,
-                    stream: true
-                });
-                for await (const part of stream) {
-                    const delta = part.choices?.[0]?.delta?.content;
-                    if (delta) res.write(`data: ${JSON.stringify({ delta })}\n\n`);
+
+            let closed = false;
+            const killer = getTimerPolicy(tId) ? setInterval(() => {
+                if (closed) return;
+                if (isTimerExpired(tId)) {
+                    closed = true;
+                    try { rejectSSETimer(res, tId); } catch { }
                 }
-                res.write("data: [DONE]\n\n");
-                res.end();
+            }, 1000) : null;
+
+            res.on("close", () => { closed = true; if (killer) clearInterval(killer); });
+
+            try {
+                const { model, messages, temperature, max_tokens, top_p, frequency_penalty, presence_penalty } = req.body || {};
+                const stream = await openai.chat.completions.create({
+                    model,
+                    messages,
+                    stream: true,
+                    ...(temperature !== undefined ? { temperature } : {}),
+                    ...(max_tokens !== undefined ? { max_tokens } : {}),
+                    ...(top_p !== undefined ? { top_p } : {}),
+                    ...(frequency_penalty !== undefined ? { frequency_penalty } : {}),
+                    ...(presence_penalty !== undefined ? { presence_penalty } : {}),
+                });
+
+                for await (const part of stream) {
+                    if (closed) break;
+                    if (getTimerPolicy(tId) && isTimerExpired(tId)) {
+                        closed = true;
+                        try { rejectSSETimer(res, tId); } catch { }
+                        break;
+                    }
+                    const delta = part.choices?.[0]?.delta?.content;
+                    if (delta) res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: delta } }] })}\n\n`);
+                }
+
+                const totalTokens = stream.usage?.total_tokens || 0;
+                try {
+                    res.write(`data: ${JSON.stringify({ usage: { total_tokens: totalTokens } })}\n\n`);
+                    res.write("data: [DONE]\n\n");
+                    res.end();
+                } catch { }
             } catch (err) {
-                console.error("❌ Errore nello stream openaiAnalyse:", err.message);
-                res.write(`data: ${JSON.stringify({ error: "Errore durante lo streaming AI." })}\n\n`);
-                res.end();
+                console.error("openaiSimulateurTimer error:", err);
+                if (!closed) {
+                    try {
+                        res.write(`data: ${JSON.stringify({ error: true, message: "stream_failed", details: String(err?.message || err) })}\n\n`);
+                        res.write("data: [DONE]\n\n");
+                        res.end();
+                    } catch { }
+                }
+            } finally {
+                if (killer) clearInterval(killer);
+            }
+        }
+
+        // OpenAI Analyse (chat completions NON-stream, risposta uniforme)
+        else if (service === "openaiAnalyse") {
+            try {
+                const { model, messages, temperature, max_tokens, top_p, frequency_penalty, presence_penalty } = req.body || {};
+                const resp = await openai.chat.completions.create({
+                    model: model || "gpt-4.1-mini",
+                    messages: messages || [],
+                    stream: false,
+                    ...(temperature !== undefined ? { temperature } : {}),
+                    ...(max_tokens !== undefined ? { max_tokens } : {}),
+                    ...(top_p !== undefined ? { top_p } : {}),
+                    ...(frequency_penalty !== undefined ? { frequency_penalty } : {}),
+                    ...(presence_penalty !== undefined ? { presence_penalty } : {}),
+                });
+
+                // estrai testo in modo robusto
+                let content = "";
+                const choice = resp?.choices?.[0];
+                if (choice?.message?.content) {
+                    content = Array.isArray(choice.message.content)
+                        ? choice.message.content
+                            .filter(p => p && (p.type === "text" || typeof p === "string"))
+                            .map(p => (typeof p === "string" ? p : (p.text || "")))
+                            .join("")
+                        : String(choice.message.content);
+                } else if (typeof choice?.text === "string") {
+                    content = choice.text;
+                }
+
+                return res.status(200).json({ ok: true, content, raw: resp });
+            } catch (err) {
+                const status = err?.response?.status || 500;
+                let details = err?.response?.data;
+                try { if (Buffer.isBuffer(details)) details = details.toString("utf8"); } catch { }
+                return res.status(status).json({
+                    ok: false,
+                    message: "openaiAnalyse error",
+                    status,
+                    details
+                });
             }
         }
 
@@ -559,14 +987,62 @@ app.post("/api/:service", upload.none(), async (req, res) => {
             const apiKey = process.env.AZURE_OPENAI_KEY_SIMULATEUR;
             const endpoint = process.env.AZURE_OPENAI_ENDPOINT_SIMULATEUR;
             const deployment = process.env.AZURE_OPENAI_DEPLOYMENT_COACH;
-            const apiVersion = process.env.AZURE_OPENAI_API_VERSION_COACH;
+            const apiVersion = process.env.AZURE_OPENAI_API_VERSION_COACH || "2024-11-20";
+
+            if (!apiKey || !endpoint || !deployment) {
+                return res.status(500).json({
+                    ok: false, message: "Azure env missing", details: {
+                        hasKey: !!apiKey, hasEndpoint: !!endpoint, hasDeployment: !!deployment
+                    }
+                });
+            }
             const apiUrl = `${endpoint}/openai/deployments/${deployment}/chat/completions?api-version=${apiVersion}`;
+
+            const { messages, temperature, max_tokens, top_p, frequency_penalty, presence_penalty } = req.body || {};
+            const payload = {
+                messages: messages || [],
+                stream: false,
+                ...(temperature !== undefined ? { temperature } : {}),
+                ...(max_tokens !== undefined ? { max_tokens } : {}),
+                ...(top_p !== undefined ? { top_p } : {}),
+                ...(frequency_penalty !== undefined ? { frequency_penalty } : {}),
+                ...(presence_penalty !== undefined ? { presence_penalty } : {}),
+            };
+
             try {
-                const response = await axiosInstance.post(apiUrl, req.body, { headers: { 'api-key': apiKey, 'Content-Type': 'application/json' } });
-                return res.json(response.data);
+                const { data } = await axiosInstance.post(apiUrl, payload, {
+                    headers: { "api-key": apiKey, "Content-Type": "application/json" },
+                });
+
+                // estrai testo in modo robusto (Azure può dare stringa o array di parti)
+                let content = "";
+                const choice = data?.choices?.[0];
+                if (choice?.message?.content) {
+                    content = Array.isArray(choice.message.content)
+                        ? choice.message.content
+                            .filter(p => p && (p.type === "text" || typeof p === "string"))
+                            .map(p => (typeof p === "string" ? p : (p.text || "")))
+                            .join("")
+                        : String(choice.message.content);
+                } else if (typeof choice?.text === "string") {
+                    content = choice.text;
+                }
+
+                return res.status(200).json({ ok: true, content, raw: data });
             } catch (err) {
-                console.error("❌ Azure Analyse Error:", err.response?.data || err.message);
-                return res.status(err.response?.status || 500).json(err.response?.data || { error: "Errore interno Azure Analyse" });
+                const status = err?.response?.status || 500;
+                const headers = err?.response?.headers || {};
+                const requestId = headers["x-request-id"] || headers["x-ms-request-id"] || headers["apim-request-id"] || "";
+                let details = err?.response?.data;
+                try { if (Buffer.isBuffer(details)) details = details.toString("utf8"); } catch { }
+
+                return res.status(status).json({
+                    ok: false,
+                    message: "azureOpenaiAnalyse error",
+                    status,
+                    requestId,
+                    details,
+                });
             }
         }
 
@@ -622,7 +1098,7 @@ app.post("/api/:service", upload.none(), async (req, res) => {
             const voice = (selectedVoice && selectedVoice.trim()) || voiceMap[lang] || "fr-FR-RemyMultilingualNeural";
 
             const ssml = buildSSML({
-                text: applySpeechDictionary(text),
+                text,
                 voice
             });
 
@@ -698,7 +1174,7 @@ app.post("/api/:service", upload.none(), async (req, res) => {
             const lang = (selectedLanguage || "").trim().toLowerCase();
             const voice = (selectedVoice && selectedVoice.trim()) || voiceMap[lang] || "fr-FR-RemyMultilingualNeural";
 
-            const ssml = buildSSML({ text: applySpeechDictionary(text), voice });
+            const ssml = buildSSML({ text, voice });
             const contentType = wantedFormat === "webm" ? "audio/webm" : "audio/mpeg";
 
             const ok = enqueueTtsJob(wantedFormat, { ssml, res, req, contentType });
@@ -769,7 +1245,7 @@ app.post("/api/:service", upload.none(), async (req, res) => {
                         historique,
                         rapport,
                         usergroup,
-                        timeSession || 'N/A'   // fallback se non arriva nulla
+                        timeSession || 'N/A'
                     ]
                 );
 
@@ -941,7 +1417,7 @@ app.post("/api/:service", upload.none(), async (req, res) => {
 // Secure endpoint to obtain Azure Speech token
 app.get("/get-azure-token", async (req, res) => {
     const apiKey = process.env.AZURE_SPEECH_API_KEY;
-    const region = process.env.AZURE_REGION;
+    const region = process.env.AZURE_REGION_AI_SERVICES;
     if (!apiKey || !region) return res.status(500).json({ error: "Azure keys missing in the backend" });
     try {
         const tokenRes = await axios.post(
@@ -955,6 +1431,136 @@ app.get("/get-azure-token", async (req, res) => {
         res.status(500).json({ error: "Failed to generate token" });
     }
 });
+
+// ------------------ start heygen ----------------------
+
+// === HEYGEN: Streaming token (client -> server -> HeyGen) ===
+app.get("/api/heygen/streaming-token", async (req, res) => {
+    try {
+        const r = await heygen.post("/v1/streaming.create_token");
+        const token = r.data?.data?.token;
+        if (!token) return res.status(502).json({ error: "No token from HeyGen" });
+        res.json({ token });
+    } catch (e) {
+        const status = e?.response?.status || 500;
+        return res.status(status).json({ error: "HeyGen token error", details: e?.response?.data || e.message });
+    }
+});
+
+// === HEYGEN: Lista streaming avatars (per UI di scelta) ===
+app.get("/api/heygen/streaming/avatars", async (req, res) => {
+    try {
+        const r = await heygen.get("/v1/streaming/avatar.list");
+        res.json(r.data);
+    } catch (e) {
+        res.status(e?.response?.status || 500).json({ error: "HeyGen avatars error", details: e?.response?.data || e.message });
+    }
+});
+
+// === HEYGEN: Lista voices (v2) ===
+app.get("/api/heygen/voices", async (req, res) => {
+    try {
+        const r = await heygen.get("/v2/voices");
+        res.json(r.data);
+    } catch (e) {
+        res.status(e?.response?.status || 500).json({ error: "HeyGen voices error", details: e?.response?.data || e.message });
+    }
+});
+
+// === HEYGEN: Lista avatars (v2) ===
+app.get("/api/heygen/avatars", async (req, res) => {
+    try {
+        const r = await heygen.get("/v2/avatars");
+        res.json(r.data);
+    } catch (e) {
+        res.status(e?.response?.status || 500).json({ error: "HeyGen avatars v2 error", details: e?.response?.data || e.message });
+    }
+});
+
+// === HEYGEN: Generazione video (v2) ===
+app.post("/api/heygen/video/generate", async (req, res) => {
+    const {
+        avatar_id = process.env.HEYGEN_DEFAULT_AVATAR_ID || "default",
+        voice_id = process.env.HEYGEN_DEFAULT_VOICE_ID,
+        text,
+        language = process.env.HEYGEN_DEFAULT_LANG || "fr",
+        ratio = "16:9",        // opzionale: "16:9" | "9:16" | "1:1"
+        background = "green_screen" // o "transparent" (dipende dal piano) / "office" / ecc.
+    } = req.body || {};
+
+    if (!text) return res.status(400).json({ error: "text is required" });
+
+    try {
+        const r = await heygen.post("/v2/video/generate", {
+            avatar_id,
+            voice_id,
+            text,
+            language,
+            ratio,
+            background
+        });
+        // risposta contiene data.video_id
+        res.json(r.data);
+    } catch (e) {
+        res.status(e?.response?.status || 500).json({ error: "HeyGen video generate error", details: e?.response?.data || e.message });
+    }
+});
+
+// === HEYGEN: LiveKit v2 endpoints (proxy sicuro) ===
+app.post("/api/heygen/streaming/new", async (req, res) => {
+    try {
+        const { avatar_id, voice_id, language = "fr", version = "v2" } = req.body || {};
+        const r = await heygen.post("/v1/streaming.new", { version, avatar_id, voice_id, language });
+        res.json(r.data?.data || r.data);
+    } catch (e) {
+        res.status(e?.response?.status || 500).json({ error: "HeyGen streaming.new error", details: e?.response?.data || e.message });
+    }
+});
+
+app.post("/api/heygen/streaming/start", async (req, res) => {
+    try {
+        const { session_id } = req.body || {};
+        const r = await heygen.post("/v1/streaming.start", { session_id });
+        res.json(r.data?.data || r.data);
+    } catch (e) {
+        res.status(e?.response?.status || 500).json({ error: "HeyGen streaming.start error", details: e?.response?.data || e.message });
+    }
+});
+
+app.post("/api/heygen/streaming/task", async (req, res) => {
+    try {
+        const { session_id, text, task_type = "talk" } = req.body || {};
+        const r = await heygen.post("/v1/streaming.task", { session_id, text, task_type });
+        res.json(r.data?.data || r.data);
+    } catch (e) {
+        res.status(e?.response?.status || 500).json({ error: "HeyGen streaming.task error", details: e?.response?.data || e.message });
+    }
+});
+
+app.post("/api/heygen/streaming/stop", async (req, res) => {
+    try {
+        const { session_id } = req.body || {};
+        const r = await heygen.post("/v1/streaming.stop", { session_id });
+        res.json(r.data?.data || r.data);
+    } catch (e) {
+        res.status(e?.response?.status || 500).json({ error: "HeyGen streaming.stop error", details: e?.response?.data || e.message });
+    }
+});
+
+// === HEYGEN: Stato video (polling) ===
+app.get("/api/heygen/video/status", async (req, res) => {
+    const { video_id } = req.query;
+    if (!video_id) return res.status(400).json({ error: "video_id is required" });
+    try {
+        // endpoint status
+        const r = await heygen.get("/v1/video_status.get", { params: { video_id } });
+        res.json(r.data);
+    } catch (e) {
+        res.status(e?.response?.status || 500).json({ error: "HeyGen video status error", details: e?.response?.data || e.message });
+    }
+});
+
+// ------------------ end heygen ----------------------
 
 // Start server
 /*
@@ -1267,6 +1873,8 @@ wss.on("connection", (clientWs, req) => {
     const clean = (s) => (s || "").replace(/[^A-Za-z0-9_\-]/g, "").slice(0, 64); // ------- AGGIUNTO 25/08 -----------
     let elVoiceId = clean(urlObj.searchParams.get("el_voice")) || process.env.ELEVENLABS_DEFAULT_VOICE_ID; // ------- AGGIUNTO 25/08 -----------
     let elModelId = clean(urlObj.searchParams.get("el_model")) || process.env.ELEVENLABS_MODEL_ID || "eleven_flash_v2_5"; // ------- AGGIUNTO 25/08 -----------
+    const qDeploy = clean(urlObj.searchParams.get("az_deploy"));
+    const DEPLOY = qDeploy || AZ_DEPLOY;
 
     const elVsB64 = urlObj.searchParams.get("el_vs");
     const voiceSettings = parseElVS(elVsB64);
@@ -1283,7 +1891,7 @@ wss.on("connection", (clientWs, req) => {
     const azureUrl =
         `wss://${endpointHost}/openai/realtime` +
         `?api-version=${encodeURIComponent(AZ_VER)}` +
-        `&deployment=${encodeURIComponent(AZ_DEPLOY)}` +
+        `&deployment=${encodeURIComponent(DEPLOY)}` +
         `&api-key=${encodeURIComponent(AZ_KEY)}`;
 
     console.log("[Realtime] Dialing Azure WS:", azureUrl.replace(/api-key=[^&]+/, "api-key=***"));
@@ -1467,7 +2075,7 @@ wss.on("connection", (clientWs, req) => {
 
             if (rid && chunk) {
                 const el = elevenByResp.get(rid);
-                if (el) el.sendText(applySpeechDictionary(chunk));
+                if (el) el.sendText(chunk);
             }
             return;
         }
