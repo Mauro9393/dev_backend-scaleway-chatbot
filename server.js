@@ -807,7 +807,7 @@ app.post("/api/:service", upload.none(), async (req, res) => {
             }
         }
 
-        // OpenAI streaming chat-completition (SDK)
+        // OpenAI streaming chat-completition
         /*
         else if (service === "openaiSimulateur") {
             res.setHeader("Content-Type", "text/event-stream");
@@ -831,6 +831,7 @@ app.post("/api/:service", upload.none(), async (req, res) => {
         }
         */
 
+        // OpenAI streaming Response Openai
         else if (service === "openaiSimulateur") {
             // ---- header SSE verso il browser ----
             res.setHeader("Content-Type", "text/event-stream");
