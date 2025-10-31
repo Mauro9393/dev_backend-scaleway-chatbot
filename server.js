@@ -807,7 +807,8 @@ app.post("/api/:service", upload.none(), async (req, res) => {
             }
         }
 
-        // OpenAI streaming (SDK)
+        // OpenAI streaming chat-completition (SDK)
+        /*
         else if (service === "openaiSimulateur") {
             res.setHeader("Content-Type", "text/event-stream");
             res.setHeader("Cache-Control", "no-cache");
@@ -827,6 +828,135 @@ app.post("/api/:service", upload.none(), async (req, res) => {
             res.write(`data: ${JSON.stringify({ usage: { total_tokens: totalTokens } })}\n\n`);
             res.write("data: [DONE]\n\n");
             return res.end();
+        }
+        */
+
+        else if (service === "openaiSimulateur") {
+            // ---- header SSE verso il browser ----
+            res.setHeader("Content-Type", "text/event-stream");
+            res.setHeader("Cache-Control", "no-cache");
+            res.setHeader("Connection", "keep-alive");
+            res.setHeader("Access-Control-Allow-Origin", "*");
+            res.setHeader("X-Accel-Buffering", "no");
+            res.flushHeaders();
+
+            try {
+                const {
+                    model,
+                    messages,
+                    temperature,
+                    top_p,
+                    frequency_penalty,
+                    presence_penalty,
+                    max_tokens,
+                    max_output_tokens
+                } = req.body || {};
+
+                // ⚠️ Responses API usa:
+                //   - "input" invece di "messages"
+                //   - "max_output_tokens" invece di "max_tokens" per limitare la lunghezza dell'output. :contentReference[oaicite:2]{index=2}
+                //
+                // Buona notizia: puoi passare direttamente l'array `messages`
+                // ( [ { role:"system"/"user"/"assistant", content:"..." }, ... ] )
+                // dentro `input`. Questo è supportato dalla Responses API. :contentReference[oaicite:3]{index=3}
+                //
+                // Mappiamo max_tokens -> max_output_tokens per retrocompatibilità lato UI.
+                const effectiveMaxOutputTokens =
+                    max_output_tokens !== undefined
+                        ? max_output_tokens
+                        : (max_tokens !== undefined ? max_tokens : undefined);
+
+                // --- chiamiamo la Responses API in streaming ---
+                const stream = await openai.responses.create({
+                    model: model || "gpt-4o", // fallback se il client non manda il modello
+                    input: messages || [],
+                    stream: true,
+                    ...(temperature !== undefined ? { temperature } : {}),
+                    ...(top_p !== undefined ? { top_p } : {}),
+                    ...(frequency_penalty !== undefined ? { frequency_penalty } : {}),
+                    ...(presence_penalty !== undefined ? { presence_penalty } : {}),
+                    ...(effectiveMaxOutputTokens !== undefined ? { max_output_tokens: effectiveMaxOutputTokens } : {}),
+                });
+
+                // Ci teniamo l'ultima usage per mandarla al frontend alla fine
+                let usageSnapshot = null;
+
+                // La Responses API ci dà una serie di eventi.
+                // Esempi di eventi:
+                // - { type: "response.output_text.delta", delta: "ciao" }
+                // - { type: "response.completed", response: { usage: {...} } }
+                // - { type: "response.error", error: {...} }
+                // :contentReference[oaicite:4]{index=4}
+                for await (const event of stream) {
+                    const t = event.type;
+
+                    if (t === "response.output_text.delta") {
+                        // chunk di testo incrementale
+                        const deltaText = event.delta || "";
+                        if (deltaText) {
+                            // Manteniamo ESATTAMENTE il payload che il frontend già si aspetta
+                            // così NON dobbiamo toccare il codice front.
+                            res.write(
+                                `data: ${JSON.stringify({
+                                    choices: [{ delta: { content: deltaText } }]
+                                })}\n\n`
+                            );
+                        }
+                    }
+
+                    else if (t === "response.completed") {
+                        // Fine completamento. Qui possiamo leggere le usage tokens
+                        // La struttura tipica è event.response.usage:
+                        // { input_tokens, output_tokens, total_tokens, ... }
+                        usageSnapshot = event.response?.usage || null;
+
+                        const totalTokens =
+                            (usageSnapshot?.total_tokens !== undefined
+                                ? usageSnapshot.total_tokens
+                                : ((usageSnapshot?.input_tokens || 0) +
+                                    (usageSnapshot?.output_tokens || 0)
+                                )
+                            );
+
+                        res.write(
+                            `data: ${JSON.stringify({
+                                usage: { total_tokens: totalTokens }
+                            })}\n\n`
+                        );
+                    }
+
+                    else if (t === "response.error") {
+                        // Errore dal modello durante lo stream
+                        res.write(
+                            `data: ${JSON.stringify({
+                                error: true,
+                                message: event.error?.message || "openai error"
+                            })}\n\n`
+                        );
+                    }
+
+                    // Puoi ignorare altri tipi di evento (output_item.added, ecc.)
+                }
+
+                // chiusura stream verso frontend
+                res.write("data: [DONE]\n\n");
+                return res.end();
+
+            } catch (err) {
+                console.error("openaiSimulateur error:", err);
+
+                // Se qualcosa va storto lato server/SDK,
+                // mandiamo un ultimo pacchetto SSE d'errore + chiudiamo.
+                try {
+                    res.write(`data: ${JSON.stringify({
+                        error: true,
+                        message: "stream_failed",
+                        details: String(err?.message || err)
+                    })}\n\n`);
+                    res.write("data: [DONE]\n\n");
+                } catch { /* ignore */ }
+                return res.end();
+            }
         }
 
         else if (service === "openaiSimulateurCreps") {
@@ -850,7 +980,7 @@ app.post("/api/:service", upload.none(), async (req, res) => {
             return res.end();
         }
 
-        // OpenAI streaming (SDK) con timer_chatbot_id
+        // OpenAI streaming chat-completion (SDK) con timer_chatbot_id
         else if (service === "openaiSimulateurTimer") {
             // SSE headers
             res.setHeader("Content-Type", "text/event-stream");
@@ -939,9 +1069,18 @@ app.post("/api/:service", upload.none(), async (req, res) => {
         }
 
         // OpenAI Analyse (chat completions NON-stream, risposta uniforme)
+        /*
         else if (service === "openaiAnalyse") {
             try {
-                const { model, messages, temperature, max_tokens, top_p, frequency_penalty, presence_penalty } = req.body || {};
+                const {
+                    model,
+                    messages,
+                    temperature,
+                    max_tokens,
+                    top_p,
+                    frequency_penalty,
+                    presence_penalty
+                } = req.body || {};
                 const resp = await openai.chat.completions.create({
                     model: model || "gpt-4.1-mini",
                     messages: messages || [],
@@ -977,6 +1116,112 @@ app.post("/api/:service", upload.none(), async (req, res) => {
                     message: "openaiAnalyse error",
                     status,
                     details
+                });
+            }
+        }
+        */
+
+        // OpenAI Analyse (Responses API NON-stream, risposta uniforme)
+        else if (service === "openaiAnalyse") {
+            try {
+                const {
+                    model,
+                    messages = [],
+                    temperature,
+                    max_tokens,
+                    top_p,
+                    frequency_penalty,
+                    presence_penalty,
+                } = req.body || {};
+
+                // 1. Estrai eventuale system/developer prompt come instructions
+                let instructions;
+                const conversationForInput = [];
+
+                for (const m of messages) {
+                    // Normalizza il contenuto in stringa (può essere string o array di parti)
+                    let textContent = "";
+                    if (typeof m.content === "string") {
+                        textContent = m.content;
+                    } else if (Array.isArray(m.content)) {
+                        textContent = m.content
+                            .map(p =>
+                                typeof p === "string"
+                                    ? p
+                                    : (p && (p.text || p.content || "")) // fallback sicuro
+                            )
+                            .join("");
+                    } else if (m && typeof m.content === "object" && m.content !== null) {
+                        // tipo { text: "..."} ecc.
+                        textContent = m.content.text || m.content.content || "";
+                    }
+
+                    if (
+                        (m.role === "system" || m.role === "developer") &&
+                        instructions === undefined
+                    ) {
+                        // prendi solo il PRIMO system/dev come instructions
+                        instructions = textContent;
+                    } else {
+                        // tutto il resto va nell'input conversazionale
+                        // La Responses API accetta array di messaggi {role, content}
+                        conversationForInput.push({
+                            role: m.role,      // "user" | "assistant"
+                            content: textContent,
+                        });
+                    }
+                }
+
+                // Se per qualche ragione non abbiamo messaggi (edge case),
+                // evita di mandare [] vuoto: manda stringa vuota
+                const finalInput =
+                    conversationForInput.length === 0
+                        ? ""
+                        : conversationForInput;
+
+                // 2. Chiama la nuova Responses API
+                const resp = await openai.responses.create({
+                    model: model || "gpt-4o-mini", // era "gpt-4.1-mini", puoi scegliere il tuo default
+                    input: finalInput,
+                    ...(instructions ? { instructions } : {}),
+
+                    // Parametri di controllo stile Chat Completions
+                    ...(temperature !== undefined ? { temperature } : {}),
+                    ...(top_p !== undefined ? { top_p } : {}),
+                    // Chat Completions usava max_tokens; Responses usa max_output_tokens
+                    ...(max_tokens !== undefined
+                        ? { max_output_tokens: max_tokens }
+                        : {}),
+                    ...(frequency_penalty !== undefined
+                        ? { frequency_penalty }
+                        : {}),
+                    ...(presence_penalty !== undefined
+                        ? { presence_penalty }
+                        : {}),
+                });
+
+                // 3. Estrai testo finale
+                // Niente più choices[0].message.content:
+                // Responses API ti dà direttamente .output_text
+                const content = resp.output_text || "";
+
+                return res.status(200).json({
+                    ok: true,
+                    content,
+                    raw: resp, // <- oggetto completo: usage, tokens, ecc.
+                });
+            } catch (err) {
+                const status = err?.response?.status || 500;
+                let details = err?.response?.data;
+                try {
+                    if (Buffer.isBuffer(details)) details = details.toString("utf8");
+                } catch { /* ignore */ }
+
+                return res.status(status).json({
+                    ok: false,
+                    message: "openaiAnalyse error",
+                    status,
+                    details,
                 });
             }
         }
@@ -1510,7 +1755,7 @@ app.post("/api/heygen/video/generate", async (req, res) => {
 app.post("/api/heygen/streaming/new", async (req, res) => {
     try {
         const { avatar_id, voice_id, language = "fr", version = "v2" } = req.body || {};
-        const r = await heygen.post("/v1/streaming.new", { version, avatar_id, voice_id, language });
+        const r = await heygen.post("/v1/streaming.new", { version, avatar_id, voice_id, language, background: "transparent" });
         res.json(r.data?.data || r.data);
     } catch (e) {
         res.status(e?.response?.status || 500).json({ error: "HeyGen streaming.new error", details: e?.response?.data || e.message });
