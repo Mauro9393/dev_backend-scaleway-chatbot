@@ -284,7 +284,7 @@ process.env.GOOGLE_APPLICATION_CREDENTIALS = keyPath;
 
 // OpenAI SDK
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY_SIMULATEUR });
-const openaiCreps = new OpenAI({ apiKey: process.env.OPENAI_API_KEY_SIMULATEUR });
+const openaiCreps = new OpenAI({ apiKey: process.env.OPENAI_API_KEY_SIMULATEUR_CREPS });
 
 // Vertex AI setup
 const vertexAI = new VertexAI({
@@ -1566,6 +1566,16 @@ app.post("/api/:service", upload.none(), async (req, res) => {
                 websocket_endpoint: "/api/elevenlabs-tts"
             });
         }
+
+        else if (service === "elevenlabs-tts-CREPS") {
+            // La Realtime richiede WebSocket, non HTTP POST.
+            // Questo endpoint serve solo a dare un errore chiaro al client HTTP.
+            return res.status(426).json({
+                error: "Use WebSocket for elevenlabs tts (CREPS)",
+                websocket_endpoint: "/api/elevenlabs-tts-CREPS"
+            });
+        }
+
         // ElevenLabs TTS
         else if (service === "elevenlabs") {
             const apiKey = process.env.ELEVENLAB_API_KEY;
@@ -1805,7 +1815,7 @@ server.on("upgrade", (req, socket, head) => {
         return;
     }
 
-    if (pathname === "/api/elevenlabs-tts") {
+    if (pathname === "/api/elevenlabs-tts" || pathname === "/api/elevenlabs-tts-CREPS") {
         wssEl.handleUpgrade(req, socket, head, (ws) => {
             wssEl.emit("connection", ws, req);
         });
@@ -1966,9 +1976,20 @@ wssEl.on("connection", (client, req) => {
     const elModelId = clean(urlObj.searchParams.get("el_model")) || process.env.ELEVENLABS_MODEL_ID || "eleven_flash_v2_5";
     const voiceSettings = parseElVS(urlObj.searchParams.get("el_vs"));
 
+    // 👇 capisco se questa connessione è quella CREPS dal path
+    const pathname = urlObj.pathname.toLowerCase();
+    const apiKeyToUse = pathname.includes("elevenlabs-tts-creps")
+        ? process.env.ELEVENLAB_API_KEY_CREPS   // 👈 chiave CREPS
+        : process.env.ELEVENLAB_API_KEY;       // 👈 chiave “normale”
+
     let el;
     try {
-        el = openElevenLabsWs({ voiceId: elVoiceId, modelId: elModelId, voiceSettings });
+        el = openElevenLabsWs({
+            voiceId: elVoiceId,
+            modelId: elModelId,
+            voiceSettings,
+            apiKey: apiKeyToUse            // 👈 passiamo la chiave giusta
+        });
     } catch (e) {
         try { client.close(1011, e.message); } catch { }
         return;
@@ -1978,14 +1999,13 @@ wssEl.on("connection", (client, req) => {
     el.ws.on("message", (m) => {
         try {
             const d = JSON.parse(m.toString("utf8"));
-            if (d.audio) client.send(JSON.stringify({ audio: d.audio }));   // base64 PCM 24k
+            if (d.audio) client.send(JSON.stringify({ audio: d.audio }));
             if (d.isFinal) client.send(JSON.stringify({ done: true }));
         } catch { }
     });
     el.ws.on("close", () => { try { client.close(); } catch { } });
     el.ws.on("error", (err) => { try { client.close(1011, err?.message || "eleven error"); } catch { } });
 
-    // Client -> ElevenLabs
     client.on("message", (data) => {
         let msg; try { msg = JSON.parse(data.toString()); } catch { return; }
         if (typeof msg.text === "string") el.sendText(msg.text);
@@ -2002,19 +2022,27 @@ wssEl.on("connection", (client, req) => {
 function openElevenLabsWs({
     voiceId,
     modelId = process.env.ELEVENLABS_MODEL_ID || "eleven_flash_v2_5",
-    voiceSettings = null
+    voiceSettings = null,
+    apiKey,   // 👈 nuova prop
 }) {
     const vId = voiceId || process.env.ELEVENLABS_DEFAULT_VOICE_ID;
     if (!vId) throw new Error("Missing ELEVENLABS voiceId (pass ?el_voice=... or set ELEVENLABS_DEFAULT_VOICE_ID)");
-    const apiKey = process.env.ELEVENLAB_API_KEY;
-    if (!apiKey) throw new Error("Missing ELEVENLAB_API_KEY");
 
-    const url = `wss://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(vId)}/stream-input?model_id=${encodeURIComponent(modelId)}&output_format=pcm_24000`;
+    const keyToUse = apiKey || process.env.ELEVENLAB_API_KEY;
+    if (!keyToUse) throw new Error("Missing ELEVENLAB_API_KEY (and no apiKey override)");
 
-    const elWs = new WebSocket(url, { perMessageDeflate: false, headers: { "xi-api-key": apiKey } });
+    const url =
+        `wss://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(vId)}` +
+        `/stream-input?model_id=${encodeURIComponent(modelId)}&output_format=pcm_24000`;
+
+    const elWs = new WebSocket(url, {
+        perMessageDeflate: false,
+        headers: { "xi-api-key": keyToUse }   // 👈 usa keyToUse
+    });
+
     let ready = false;
     const queue = [];
-    let wantFlush = false; // <-- NOVITÀ
+    let wantFlush = false;
 
     elWs.on("open", () => {
         ready = true;
@@ -2025,12 +2053,10 @@ function openElevenLabsWs({
         };
         try { elWs.send(JSON.stringify(initMsg)); } catch { }
 
-        // invia i testi in coda nell'ordine
         for (const t of queue.splice(0)) {
             try { elWs.send(JSON.stringify({ text: t })); } catch { }
         }
 
-        // se nel frattempo era arrivato flush → invialo ORA
         if (wantFlush) {
             try {
                 elWs.send(JSON.stringify({ flush: true }));
@@ -2058,12 +2084,12 @@ function openElevenLabsWs({
                     elWs.send(JSON.stringify({ text: "" }));
                 } catch { }
             } else {
-                // non ancora open → ricorda il flush
                 wantFlush = true;
             }
         }
     };
 }
+
 // ---------------------- //
 
 
