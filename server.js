@@ -939,7 +939,13 @@ app.post("/api/:service", upload.none(), async (req, res) => {
             res.setHeader("Content-Type", "text/event-stream");
             res.setHeader("Cache-Control", "no-cache");
             res.flushHeaders();
+            /*
             const stream = await openaiCreps.chat.completions.create({
+                model: req.body.model,
+                messages: req.body.messages,
+                stream: true
+            });*/
+            const stream = await openai.chat.completions.create({
                 model: req.body.model,
                 messages: req.body.messages,
                 stream: true
