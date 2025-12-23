@@ -30,8 +30,8 @@ function decryptSecret(b64) {
     return plain.toString('utf8');
 }
 
-const AZ_ENDPOINT = process.env.AZURE_REALTIME_OPENAI_ENDPOINT;          // es. https://2707llm.openai.azure.com
-const AZ_KEY = process.env.AZURE_REALTIME_OPENAI_API_KEY;          // KEY1/KEY2
+const AZ_ENDPOINT = process.env.AZURE_REALTIME_OPENAI_ENDPOINT; // es. https://2707llm.openai.azure.com
+const AZ_KEY = process.env.AZURE_REALTIME_OPENAI_API_KEY; // KEY1/KEY2
 const AZ_DEPLOY = process.env.AZURE_REALTIME_OPENAI_REALTIME_DEPLOYMENT; // nome deployment (NON il nome del modello)
 const AZ_VER = process.env.AZURE_REALTIME_OPENAI_API_VERSION || "2025-04-01-preview";
 
@@ -72,10 +72,10 @@ function createSynthesizerForFormat(format) {
         const conn = sdk.Connection.fromSpeechSynthesizer(synthesizer);
         conn.openConnectionAsync(
             () => { /* warm ok */ },
-            (err) => { console.warn("openConnectionAsync failed:", err?.message || err); }
+            (err) => { console.warn("openConnectionAsync failed:", err ? .message || err); }
         );
     } catch (e) {
-        console.warn("Connection warmup failed:", e?.message || e);
+        console.warn("Connection warmup failed:", e ? .message || e);
     }
 
     // Un "worker" incapsula un synthesizer riutilizzabile, con coda jobs
@@ -87,7 +87,7 @@ function createSynthesizerForFormat(format) {
 }
 
 function retireAndReplaceWorker(worker, format) {
-    try { worker.synthesizer.close(); } catch { }
+    try { worker.synthesizer.close(); } catch {}
     const pool = ttsPools[format];
     const i = pool.indexOf(worker);
     if (i >= 0) pool.splice(i, 1);
@@ -164,7 +164,7 @@ function runNextJob(worker, format) {
     const watchdog = setTimeout(() => {
         if (!started && !res.headersSent) {
             cleanupHandlers();
-            try { res.status(504).json({ error: "Azure TTS timeout before first audio chunk" }); } catch { }
+            try { res.status(504).json({ error: "Azure TTS timeout before first audio chunk" }); } catch {}
             worker.busy = false;
             return runNextJob(worker, format);
         }
@@ -174,7 +174,7 @@ function runNextJob(worker, format) {
     const onSynthesizing = (_s, e) => {
         try {
             if (clientAborted) return;
-            const bytes = e?.result?.audioData;
+            const bytes = e ? .result ? .audioData;
             if (bytes && bytes.byteLength) {
                 if (!started) {
                     sendHeadersOnce();
@@ -194,12 +194,12 @@ function runNextJob(worker, format) {
         // Se non è mai arrivato niente → errore
         if (!started || totalBytes === 0) {
             if (!res.headersSent && !clientAborted) {
-                try { res.status(502).json({ error: "No audio produced by Azure TTS" }); } catch { }
+                try { res.status(502).json({ error: "No audio produced by Azure TTS" }); } catch {}
             } else {
-                try { res.end(); } catch { }
+                try { res.end(); } catch {}
             }
         } else {
-            try { res.end(); } catch { }
+            try { res.end(); } catch {}
         }
         worker.busy = false;
         runNextJob(worker, format);
@@ -208,12 +208,12 @@ function runNextJob(worker, format) {
     const onCanceled = (_s, e) => {
         clearTimeout(watchdog);
         cleanupHandlers();
-        const details = e?.errorDetails || "synthesis canceled";
+        const details = e ? .errorDetails || "synthesis canceled";
         retireAndReplaceWorker(worker, format);
         if (!res.headersSent && !clientAborted) {
-            try { res.status(502).json({ error: "Azure TTS canceled", details }); } catch { }
+            try { res.status(502).json({ error: "Azure TTS canceled", details }); } catch {}
         } else {
-            try { res.end(); } catch { }
+            try { res.end(); } catch {}
         }
         worker.busy = false;
         runNextJob(worker, format);
@@ -221,9 +221,9 @@ function runNextJob(worker, format) {
 
     function cleanupHandlers() {
         // rimuovi i listener per evitare leak tra job
-        try { worker.synthesizer.synthesizing = undefined; } catch { }
-        try { worker.synthesizer.synthesisCompleted = undefined; } catch { }
-        try { worker.synthesizer.canceled = undefined; } catch { }
+        try { worker.synthesizer.synthesizing = undefined; } catch {}
+        try { worker.synthesizer.synthesisCompleted = undefined; } catch {}
+        try { worker.synthesizer.canceled = undefined; } catch {}
     }
 
     // Collega i listener per QUESTO job
@@ -242,9 +242,9 @@ function runNextJob(worker, format) {
                 console.error("speakSsmlAsync error:", err);
                 retireAndReplaceWorker(worker, format);
                 if (!res.headersSent && !clientAborted) {
-                    try { res.status(500).json({ error: "Azure Speech TTS failed", details: String(err) }); } catch { }
+                    try { res.status(500).json({ error: "Azure Speech TTS failed", details: String(err) }); } catch {}
                 } else {
-                    try { res.end(); } catch { }
+                    try { res.end(); } catch {}
                 }
                 worker.busy = false;
                 runNextJob(worker, format);
@@ -256,9 +256,9 @@ function runNextJob(worker, format) {
         console.error("speakSsmlAsync throw:", err);
         retireAndReplaceWorker(worker, format);
         if (!res.headersSent && !clientAborted) {
-            try { res.status(500).json({ error: "Azure Speech TTS init failed", details: String(err) }); } catch { }
+            try { res.status(500).json({ error: "Azure Speech TTS init failed", details: String(err) }); } catch {}
         } else {
-            try { res.end(); } catch { }
+            try { res.end(); } catch {}
         }
         worker.busy = false;
         runNextJob(worker, format);
@@ -345,22 +345,26 @@ const REQUIRE_TIMER_ID = true;
 function getTimerId(req) {
     // SOLO variabile "timer_chatbot_id" (body / query / header)
     return (
-        req.body?.timer_chatbot_id ||
-        req.query?.timer_chatbot_id ||
+        req.body ? .timer_chatbot_id ||
+        req.query ? .timer_chatbot_id ||
         req.get("x-timer-chatbot-id") ||
         ""
     ).toString().trim();
 }
+
 function getTimerPolicy(id) { return id ? TIMER_ID_POLICY[id] : null; }
 const now = () => Date.now();
 
 function ensureTimerSession(id) {
     const pol = getTimerPolicy(id);
-    if (!pol) return null;               // id non gestito → nessun timer applicato
+    if (!pol) return null; // id non gestito → nessun timer applicato
     if (expiredSticky.has(id)) {
         // Mantieni un record con expiresAt=0 così remaining=0
         let s = runtimeTimers.get(id);
-        if (!s) { s = { expiresAt: 0 }; runtimeTimers.set(id, s); }
+        if (!s) {
+            s = { expiresAt: 0 };
+            runtimeTimers.set(id, s);
+        }
         return s;
     }
 
@@ -384,20 +388,24 @@ function remainingTimerMs(id) {
     const s = runtimeTimers.get(id);
     return s ? Math.max(0, s.expiresAt - now()) : Infinity; // Infinity = nessun limite (id non in policy)
 }
+
 function isTimerExpired(id) {
     const pol = getTimerPolicy(id);
     if (!pol) return false; // id non gestito → non scade mai
     const rem = remainingTimerMs(id);
     const expired = rem <= 0;
     if (expired) {
-        expiredSticky.add(id);       // non permettere ricreazione
+        expiredSticky.add(id); // non permettere ricreazione
         runtimeTimers.set(id, { expiresAt: 0 }); // garantisci remaining=0
     }
     return expired;
 }
 
 function rejectJsonTimer(res, id, reason = "session_expired", status = 403) {
-    if (id) { expiredSticky.add(id); runtimeTimers.set(id, { expiresAt: 0 }); }
+    if (id) {
+        expiredSticky.add(id);
+        runtimeTimers.set(id, { expiresAt: 0 });
+    }
     res.status(status)
         .setHeader("Access-Control-Allow-Origin", "*")
         .setHeader("Access-Control-Expose-Headers", "X-Session-Remaining")
@@ -406,7 +414,10 @@ function rejectJsonTimer(res, id, reason = "session_expired", status = 403) {
 }
 
 function rejectSSETimer(res, id, reason = "session_expired") {
-    if (id) { expiredSticky.add(id); runtimeTimers.set(id, { expiresAt: 0 }); }
+    if (id) {
+        expiredSticky.add(id);
+        runtimeTimers.set(id, { expiresAt: 0 });
+    }
     try {
         res.write(`data: ${JSON.stringify({ error: true, message: reason, timer_chatbot_id: id, remaining_ms: 0 })}\n\n`);
         res.write("data: [DONE]\n\n");
@@ -421,11 +432,10 @@ function rejectSSETimer(res, id, reason = "session_expired") {
 async function streamAssistant(assistantId, messages, userId, res) {
     const thread = await openai.beta.threads.create({ messages });
     const run = await openai.beta.threads.runs.createAndStream(
-        thread.id,
-        { assistant_id: assistantId, stream: true, user: userId }
+        thread.id, { assistant_id: assistantId, stream: true, user: userId }
     );
     for await (const event of run) {
-        const delta = event.data?.delta?.content;
+        const delta = event.data ? .delta ? .content;
         if (delta) res.write(`data: ${JSON.stringify({ delta })}\n\n`);
     }
     res.write("data: [DONE]\n\n");
@@ -450,8 +460,8 @@ function buildSSML({ text, voice }) {
 }
 
 // Whisper transcription endpoint
-app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
-    console.log("🔹 /api/transcribe, req.file:", req.file?.originalname, req.file?.size);
+app.post("/api/transcribe", upload.single("audio"), async(req, res) => {
+    console.log("🔹 /api/transcribe, req.file:", req.file ? .originalname, req.file ? .size);
     const apiKey = process.env.OPENAI_API_KEY_SIMULATEUR;
     if (!apiKey) return res.status(500).json({ error: "OpenAI API key missing" });
     if (!req.file) return res.status(400).json({ error: "No audio file uploaded" });
@@ -461,21 +471,20 @@ app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
         form.append("model", "whisper-1");
         const response = await axios.post(
             "https://api.openai.com/v1/audio/transcriptions",
-            form,
-            { headers: { ...form.getHeaders(), Authorization: `Bearer ${apiKey}` } }
+            form, { headers: {...form.getHeaders(), Authorization: `Bearer ${apiKey}` } }
         );
         console.log("🎉 Whisper response:", response.data);
         return res.json(response.data);
     } catch (err) {
-        const details = err.response?.data || err.message;
+        const details = err.response ? .data || err.message;
         console.error("❌ Whisper transcription error details:", details);
-        return res.status(err.response?.status || 500)
+        return res.status(err.response ? .status || 500)
             .json({ error: "Transcription failed", details });
     }
 });
 
 // Main API router
-app.post("/api/:service", upload.none(), async (req, res) => {
+app.post("/api/:service", upload.none(), async(req, res) => {
     const { service } = req.params;
     console.log("🔹 Servizio ricevuto:", service);
     console.log("🔹 Dati ricevuti:", JSON.stringify(req.body));
@@ -523,20 +532,20 @@ app.post("/api/:service", upload.none(), async (req, res) => {
                 });
                 axiosResp.data.on("end", () => res.end());
                 axiosResp.data.on("error", (e) => {
-                    console.error("Azure SSE stream error:", e?.message || e);
+                    console.error("Azure SSE stream error:", e ? .message || e);
                     res.write(`data: ${JSON.stringify({ error: true, message: "stream_error", details: String(e) })}\n\n`);
                     res.write("data: [DONE]\n\n");
                     res.end();
                 });
 
             } catch (err) {
-                const status = err?.response?.status || 500;
-                const headers = err?.response?.headers || {};
+                const status = err ? .response ? .status || 500;
+                const headers = err ? .response ? .headers || {};
                 const requestId = headers["x-request-id"] || headers["x-ms-request-id"] || headers["apim-request-id"] || "";
 
-                let body = err?.response?.data;
+                let body = err ? .response ? .data;
                 if (Buffer.isBuffer(body)) { try { body = body.toString("utf8"); } catch { body = "<buffer>"; } }
-                if (typeof body === "object") { try { body = JSON.stringify(body); } catch { } }
+                if (typeof body === "object") { try { body = JSON.stringify(body); } catch {} }
 
                 console.error("❌ Azure SSE error:", { status, requestId, body });
 
@@ -551,9 +560,7 @@ app.post("/api/:service", upload.none(), async (req, res) => {
                 res.write("data: [DONE]\n\n");
                 res.end();
             }
-        }
-
-        else if (service === "azureOpenaiNotStream") {
+        } else if (service === "azureOpenaiNotStream") {
             const apiKey = process.env.AZURE_OPENAI_KEY_SIMULATEUR;
             const endpoint = process.env.AZURE_OPENAI_ENDPOINT_SIMULATEUR;
             const deployment = process.env.AZURE_OPENAI_DEPLOYMENT_SIMULATEUR;
@@ -579,23 +586,23 @@ app.post("/api/:service", upload.none(), async (req, res) => {
 
                 // Estraggo il testo in modo robusto (stringa o array di parti)
                 let content = "";
-                const choice = data?.choices?.[0];
-                if (choice?.message?.content) {
-                    content = Array.isArray(choice.message.content)
-                        ? choice.message.content.filter(p => p.type === "text").map(p => p.text).join("")
-                        : String(choice.message.content);
+                const choice = data ? .choices ? .[0];
+                if (choice ? .message ? .content) {
+                    content = Array.isArray(choice.message.content) ?
+                        choice.message.content.filter(p => p.type === "text").map(p => p.text).join("") :
+                        String(choice.message.content);
                 }
 
                 return res.status(200).json({ ok: true, content, raw: data });
             } catch (err) {
-                const status = err?.response?.status || 500;
-                const headers = err?.response?.headers || {};
+                const status = err ? .response ? .status || 500;
+                const headers = err ? .response ? .headers || {};
                 const requestId = headers["x-request-id"] || headers["x-ms-request-id"] || headers["apim-request-id"] || "";
-                let details = err?.response?.data;
+                let details = err ? .response ? .data;
 
                 try {
                     if (Buffer.isBuffer(details)) details = details.toString("utf8");
-                } catch { }
+                } catch {}
 
                 // una sola risposta, niente write/end multipli ⇒ niente ERR_HTTP_HEADERS_SENT
                 return res.status(status).json({
@@ -654,20 +661,20 @@ app.post("/api/:service", upload.none(), async (req, res) => {
                 }
 
                 let content = "";
-                const choice = data?.choices?.[0];
-                if (choice?.message?.content) {
-                    content = Array.isArray(choice.message.content)
-                        ? choice.message.content.filter(p => p.type === "text").map(p => p.text).join("")
-                        : String(choice.message.content);
+                const choice = data ? .choices ? .[0];
+                if (choice ? .message ? .content) {
+                    content = Array.isArray(choice.message.content) ?
+                        choice.message.content.filter(p => p.type === "text").map(p => p.text).join("") :
+                        String(choice.message.content);
                 }
 
                 return res.status(200).json({ ok: true, content, raw: data });
             } catch (err) {
-                const status = err?.response?.status || 500;
-                const headers = err?.response?.headers || {};
+                const status = err ? .response ? .status || 500;
+                const headers = err ? .response ? .headers || {};
                 const requestId = headers["x-request-id"] || headers["x-ms-request-id"] || headers["apim-request-id"] || "";
-                let details = err?.response?.data;
-                try { if (Buffer.isBuffer(details)) details = details.toString("utf8"); } catch { }
+                let details = err ? .response ? .data;
+                try { if (Buffer.isBuffer(details)) details = details.toString("utf8"); } catch {}
 
                 return res.status(status).json({
                     ok: false,
@@ -695,7 +702,7 @@ app.post("/api/:service", upload.none(), async (req, res) => {
                         ...request,
                         generationConfig: { maxOutputTokens: 2048 }
                     });
-                    const text = result.response?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+                    const text = result.response ? .candidates ? .[0] ? .content ? .parts ? .[0] ? .text || "";
                     return res.json({ text });
                 } catch (err) {
                     console.error("Vertex AI batch error:", err);
@@ -710,7 +717,7 @@ app.post("/api/:service", upload.none(), async (req, res) => {
                 res.flushHeaders();
                 const result = await vertexModel.generateContentStream(request);
                 for await (const item of result.stream) {
-                    const delta = item.candidates?.[0]?.content?.parts?.[0]?.text;
+                    const delta = item.candidates ? .[0] ? .content ? .parts ? .[0] ? .text;
                     if (delta) res.write(`data: ${JSON.stringify({ delta })}\n\n`);
                 }
                 res.write("data: [DONE]\n\n");
@@ -744,7 +751,8 @@ app.post("/api/:service", upload.none(), async (req, res) => {
                     const chatbotIdStr = ((req.body && req.body.chatbot_id) || req.query.chatbot_id || req.get("x-chatbot-id") || "").toString().trim();
                     if (!chatbotIdStr) {
                         res.write(`data: ${JSON.stringify({ error: true, message: "chatbot_id manquant" })}\n\n`);
-                        res.write("data: [DONE]\n\n"); return res.end();
+                        res.write("data: [DONE]\n\n");
+                        return res.end();
                     }
 
                     // Opzionale: prova a identificare l'utente
@@ -754,7 +762,7 @@ app.post("/api/:service", upload.none(), async (req, res) => {
                     let userIdNum = userIdHdr ? Number(userIdHdr) : null;
                     if (!userIdNum && userEmailHdr) {
                         const rUid = await pool.query("SELECT id FROM users WHERE user_mail = $1", [userEmailHdr]);
-                        userIdNum = rUid.rows[0]?.id || null;
+                        userIdNum = rUid.rows[0] ? .id || null;
                     }
 
                     let rKey;
@@ -763,21 +771,19 @@ app.post("/api/:service", upload.none(), async (req, res) => {
                         rKey = await pool.query(
                             `SELECT enc_key FROM api_keys
            WHERE user_id = $1 AND provider = 'openai' AND chatbot_id = $2
-           ORDER BY updated_at DESC LIMIT 1`,
-                            [userIdNum, chatbotIdStr]
+           ORDER BY updated_at DESC LIMIT 1`, [userIdNum, chatbotIdStr]
                         );
                     } else {
                         // Fallback: prendi la più recente per quel chatbot_id (se non distingui l'utente)
                         rKey = await pool.query(
                             `SELECT enc_key FROM api_keys
            WHERE provider = 'openai' AND chatbot_id = $1
-           ORDER BY updated_at DESC LIMIT 1`,
-                            [chatbotIdStr]
+           ORDER BY updated_at DESC LIMIT 1`, [chatbotIdStr]
                         );
                     }
 
                     if (rKey.rows.length > 0) {
-                        try { userKey = decryptSecret(rKey.rows[0].enc_key); } catch { }
+                        try { userKey = decryptSecret(rKey.rows[0].enc_key); } catch {}
                     }
 
                     // Ultimo fallback (se vuoi tenerlo): env globale
@@ -796,14 +802,15 @@ app.post("/api/:service", upload.none(), async (req, res) => {
                     stream: true
                 });
                 for await (const part of stream) {
-                    const delta = part.choices?.[0]?.delta?.content;
+                    const delta = part.choices ? .[0] ? .delta ? .content;
                     if (delta) res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: delta } }] })}\n\n`);
                 }
                 res.write("data: [DONE]\n\n");
                 return res.end();
             } catch (err) {
                 res.write(`data: ${JSON.stringify({ error: true, message: err.message })}\n\n`);
-                res.write("data: [DONE]\n\n"); return res.end();
+                res.write("data: [DONE]\n\n");
+                return res.end();
             }
         }
 
@@ -830,7 +837,6 @@ app.post("/api/:service", upload.none(), async (req, res) => {
             return res.end();
         }
         */
-
         else if (service === "openaiSimulateur") {
             res.setHeader("Content-Type", "text/event-stream");
             res.setHeader("Cache-Control", "no-cache");
@@ -845,7 +851,7 @@ app.post("/api/:service", upload.none(), async (req, res) => {
                     // supportiamo sia "input" che "messages" per retro-compatibilità
                     input,
                     messages,
-                    instructions,              // <— NUOVO
+                    instructions, // <— NUOVO
                     temperature,
                     top_p,
                     frequency_penalty,
@@ -855,9 +861,9 @@ app.post("/api/:service", upload.none(), async (req, res) => {
                 } = req.body || {};
 
                 const effectiveMaxOutputTokens =
-                    max_output_tokens !== undefined
-                        ? max_output_tokens
-                        : (max_tokens !== undefined ? max_tokens : undefined);
+                    max_output_tokens !== undefined ?
+                    max_output_tokens :
+                    (max_tokens !== undefined ? max_tokens : undefined);
 
                 // ---- Ricava instructions e input finali ----
                 let finalInstructions = instructions || null;
@@ -905,17 +911,15 @@ app.post("/api/:service", upload.none(), async (req, res) => {
                                 choices: [{ delta: { content: deltaText } }]
                             })}\n\n`);
                         }
-                    }
-                    else if (t === "response.completed") {
-                        usageSnapshot = event.response?.usage || null;
+                    } else if (t === "response.completed") {
+                        usageSnapshot = event.response ? .usage || null;
                         const totalTokens =
-                            (usageSnapshot?.total_tokens !== undefined
-                                ? usageSnapshot.total_tokens
-                                : ((usageSnapshot?.input_tokens || 0) + (usageSnapshot?.output_tokens || 0)));
+                            (usageSnapshot ? .total_tokens !== undefined ?
+                                usageSnapshot.total_tokens :
+                                ((usageSnapshot ? .input_tokens || 0) + (usageSnapshot ? .output_tokens || 0)));
 
                         res.write(`data: ${JSON.stringify({ usage: { total_tokens: totalTokens } })}\n\n`);
-                    }
-                    else if (t === "response.error") {
+                    } else if (t === "response.error") {
                         res.write(`data: ${JSON.stringify({ error: true, message: event.error?.message || "openai error" })}\n\n`);
                     }
                 }
@@ -930,12 +934,10 @@ app.post("/api/:service", upload.none(), async (req, res) => {
                         error: true, message: "stream_failed", details: String(err?.message || err)
                     })}\n\n`);
                     res.write("data: [DONE]\n\n");
-                } catch { }
+                } catch {}
                 return res.end();
             }
-        }
-
-        else if (service === "openaiSimulateurCreps") {
+        } else if (service === "openaiSimulateurCreps") {
             res.setHeader("Content-Type", "text/event-stream");
             res.setHeader("Cache-Control", "no-cache");
             res.flushHeaders();
@@ -945,12 +947,12 @@ app.post("/api/:service", upload.none(), async (req, res) => {
                 stream: true
             });
             for await (const part of stream) {
-                const delta = part.choices?.[0]?.delta?.content;
+                const delta = part.choices ? .[0] ? .delta ? .content;
                 if (delta) {
                     res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: delta } }] })}\n\n`);
                 }
             }
-            const totalTokens = stream.usage?.total_tokens || 0;
+            const totalTokens = stream.usage ? .total_tokens || 0;
             res.write(`data: ${JSON.stringify({ usage: { total_tokens: totalTokens } })}\n\n`);
             res.write("data: [DONE]\n\n");
             return res.end();
@@ -994,7 +996,7 @@ app.post("/api/:service", upload.none(), async (req, res) => {
                 if (closed) return;
                 if (isTimerExpired(tId)) {
                     closed = true;
-                    try { rejectSSETimer(res, tId); } catch { }
+                    try { rejectSSETimer(res, tId); } catch {}
                 }
             }, 1000) : null;
 
@@ -1017,19 +1019,19 @@ app.post("/api/:service", upload.none(), async (req, res) => {
                     if (closed) break;
                     if (getTimerPolicy(tId) && isTimerExpired(tId)) {
                         closed = true;
-                        try { rejectSSETimer(res, tId); } catch { }
+                        try { rejectSSETimer(res, tId); } catch {}
                         break;
                     }
-                    const delta = part.choices?.[0]?.delta?.content;
+                    const delta = part.choices ? .[0] ? .delta ? .content;
                     if (delta) res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: delta } }] })}\n\n`);
                 }
 
-                const totalTokens = stream.usage?.total_tokens || 0;
+                const totalTokens = stream.usage ? .total_tokens || 0;
                 try {
                     res.write(`data: ${JSON.stringify({ usage: { total_tokens: totalTokens } })}\n\n`);
                     res.write("data: [DONE]\n\n");
                     res.end();
-                } catch { }
+                } catch {}
             } catch (err) {
                 console.error("openaiSimulateurTimer error:", err);
                 if (!closed) {
@@ -1037,7 +1039,7 @@ app.post("/api/:service", upload.none(), async (req, res) => {
                         res.write(`data: ${JSON.stringify({ error: true, message: "stream_failed", details: String(err?.message || err) })}\n\n`);
                         res.write("data: [DONE]\n\n");
                         res.end();
-                    } catch { }
+                    } catch {}
                 }
             } finally {
                 if (killer) clearInterval(killer);
@@ -1148,9 +1150,9 @@ app.post("/api/:service", upload.none(), async (req, res) => {
 
                 // 2) Prepara il payload Responses API
                 const effectiveMaxOutputTokens =
-                    max_output_tokens !== undefined
-                        ? max_output_tokens
-                        : (max_tokens !== undefined ? max_tokens : undefined);
+                    max_output_tokens !== undefined ?
+                    max_output_tokens :
+                    (max_tokens !== undefined ? max_tokens : undefined);
 
                 const payload = {
                     model: model || "gpt-4o-mini",
@@ -1166,7 +1168,7 @@ app.post("/api/:service", upload.none(), async (req, res) => {
                 if (conversationForInput.length > 0) {
                     payload.input = conversationForInput;
                 } else {
-                    payload.prompt = "";  // seed minimo (alternativa: payload.input = [{ role:"user", content:"" }])
+                    payload.prompt = ""; // seed minimo (alternativa: payload.input = [{ role:"user", content:"" }])
                 }
 
                 // 3) Chiamata NON-stream
@@ -1182,11 +1184,11 @@ app.post("/api/:service", upload.none(), async (req, res) => {
                 });
 
             } catch (err) {
-                const status = err?.response?.status || 500;
-                let details = err?.response?.data;
+                const status = err ? .response ? .status || 500;
+                let details = err ? .response ? .data;
                 try {
                     if (Buffer.isBuffer(details)) details = details.toString("utf8");
-                } catch { }
+                } catch {}
                 return res.status(status).json({
                     ok: false,
                     message: "openaiAnalyse error",
@@ -1207,8 +1209,12 @@ app.post("/api/:service", upload.none(), async (req, res) => {
 
             if (!apiKey || !endpoint || !deployment) {
                 return res.status(500).json({
-                    ok: false, message: "Azure env missing", details: {
-                        hasKey: !!apiKey, hasEndpoint: !!endpoint, hasDeployment: !!deployment
+                    ok: false,
+                    message: "Azure env missing",
+                    details: {
+                        hasKey: !!apiKey,
+                        hasEndpoint: !!endpoint,
+                        hasDeployment: !!deployment
                     }
                 });
             }
@@ -1232,25 +1238,25 @@ app.post("/api/:service", upload.none(), async (req, res) => {
 
                 // estrai testo in modo robusto (Azure può dare stringa o array di parti)
                 let content = "";
-                const choice = data?.choices?.[0];
-                if (choice?.message?.content) {
-                    content = Array.isArray(choice.message.content)
-                        ? choice.message.content
-                            .filter(p => p && (p.type === "text" || typeof p === "string"))
-                            .map(p => (typeof p === "string" ? p : (p.text || "")))
-                            .join("")
-                        : String(choice.message.content);
-                } else if (typeof choice?.text === "string") {
+                const choice = data ? .choices ? .[0];
+                if (choice ? .message ? .content) {
+                    content = Array.isArray(choice.message.content) ?
+                        choice.message.content
+                        .filter(p => p && (p.type === "text" || typeof p === "string"))
+                        .map(p => (typeof p === "string" ? p : (p.text || "")))
+                        .join("") :
+                        String(choice.message.content);
+                } else if (typeof choice ? .text === "string") {
                     content = choice.text;
                 }
 
                 return res.status(200).json({ ok: true, content, raw: data });
             } catch (err) {
-                const status = err?.response?.status || 500;
-                const headers = err?.response?.headers || {};
+                const status = err ? .response ? .status || 500;
+                const headers = err ? .response ? .headers || {};
                 const requestId = headers["x-request-id"] || headers["x-ms-request-id"] || headers["apim-request-id"] || "";
-                let details = err?.response?.data;
-                try { if (Buffer.isBuffer(details)) details = details.toString("utf8"); } catch { }
+                let details = err ? .response ? .data;
+                try { if (Buffer.isBuffer(details)) details = details.toString("utf8"); } catch {}
 
                 return res.status(status).json({
                     ok: false,
@@ -1269,24 +1275,20 @@ app.post("/api/:service", upload.none(), async (req, res) => {
             const { text, selectedVoice } = req.body;
             if (!text) return res.status(400).json({ error: "Text is required" });
             const allowedVoices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
-            const voice = allowedVoices.includes((selectedVoice || "").trim().toLowerCase())
-                ? selectedVoice.trim().toLowerCase()
-                : "fable";
+            const voice = allowedVoices.includes((selectedVoice || "").trim().toLowerCase()) ?
+                selectedVoice.trim().toLowerCase() :
+                "fable";
             try {
                 const response = await axios.post(
-                    "https://api.openai.com/v1/audio/speech",
-                    { model: "gpt-4o-mini-tts", input: text, voice, instructions: "Speak in a gentle, slow and friendly way." },
-                    { headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, responseType: "arraybuffer" }
+                    "https://api.openai.com/v1/audio/speech", { model: "gpt-4o-mini-tts", input: text, voice, instructions: "Speak in a gentle, slow and friendly way." }, { headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, responseType: "arraybuffer" }
                 );
                 res.setHeader("Content-Type", "audio/mpeg");
                 return res.send(response.data);
             } catch (err) {
-                console.error("OpenAI TTS error:", err.response?.data || err.message);
-                return res.status(err.response?.status || 500).json({ error: "OpenAI TTS failed", details: err.message });
+                console.error("OpenAI TTS error:", err.response ? .data || err.message);
+                return res.status(err.response ? .status || 500).json({ error: "OpenAI TTS failed", details: err.message });
             }
-        }
-
-        else if (service === "azureTTS-Scaleway") {
+        } else if (service === "azureTTS-Scaleway") {
             const {
                 text,
                 selectedLanguage,
@@ -1321,8 +1323,7 @@ app.post("/api/:service", upload.none(), async (req, res) => {
             try {
                 const responseTTS = await axios.post(
                     endpoint,
-                    ssml,
-                    {
+                    ssml, {
                         headers: {
                             "Ocp-Apim-Subscription-Key": apiKey,
                             "Content-Type": "application/ssml+xml; charset=utf-8",
@@ -1336,11 +1337,11 @@ app.post("/api/:service", upload.none(), async (req, res) => {
                 res.setHeader("Content-Type", "audio/mpeg");
                 return res.send(responseTTS.data);
             } catch (err) {
-                const status = err.response?.status || 500;
-                const headers = err.response?.headers || {};
+                const status = err.response ? .status || 500;
+                const headers = err.response ? .headers || {};
                 const requestId = headers["x-requestid"] || headers["x-ms-requestid"] || "";
 
-                let textErr = err.response?.data;
+                let textErr = err.response ? .data;
                 if (Buffer.isBuffer(textErr)) {
                     try { textErr = textErr.toString("utf8"); } catch { textErr = "<buffer>"; }
                 } else if (typeof textErr === "object") {
@@ -1365,9 +1366,7 @@ app.post("/api/:service", upload.none(), async (req, res) => {
                 });
             }
 
-        }
-
-        else if (service === "azureTTS-websocked-Scaleway") {
+        } else if (service === "azureTTS-websocked-Scaleway") {
             const { text, selectedLanguage, selectedVoice } = req.body;
             const qFormat = (req.query.format || "").toLowerCase(); // ?format=webm / mp3
             const wantedFormat = (qFormat === "mp3" || qFormat === "webm") ? qFormat : "webm";
@@ -1401,15 +1400,14 @@ app.post("/api/:service", upload.none(), async (req, res) => {
         }
 
 
-
         // OpenAI Streaming TTS (SDK)
         else if (service === "streaming-openai-tts") {
             const { text, selectedVoice } = req.body;
             if (!text) return res.status(400).json({ error: "Text is required" });
             const allowed = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
-            const voice = allowed.includes((selectedVoice || "").trim().toLowerCase())
-                ? selectedVoice.trim().toLowerCase()
-                : "fable";
+            const voice = allowed.includes((selectedVoice || "").trim().toLowerCase()) ?
+                selectedVoice.trim().toLowerCase() :
+                "fable";
             try {
                 const ttsResp = await openai.audio.speech.create({ model: "tts-1", input: text, voice, instructions: "Speak in a cheerful and positive tone.", response_format: "mp3" });
                 res.setHeader("Content-Type", "audio/mpeg");
@@ -1433,27 +1431,31 @@ app.post("/api/:service", upload.none(), async (req, res) => {
             const voiceMap = { alloy: "alloy", echo: "echo", fable: "fable", onyx: "onyx", nova: "nova", shimmer: "shimmer" };
             const voice = voiceMap[(selectedVoice || "").trim().toLowerCase()] || "fable";
             try {
-                const response = await axios.post(url, { model: "tts-1", input: text, voice },
-                    { headers: { "Content-Type": "application/json", "api-key": apiKey, "Accept": "audio/mpeg" }, responseType: "arraybuffer" }
-                );
+                const response = await axios.post(url, { model: "tts-1", input: text, voice }, { headers: { "Content-Type": "application/json", "api-key": apiKey, "Accept": "audio/mpeg" }, responseType: "arraybuffer" });
                 res.setHeader("Content-Type", "audio/mpeg");
                 return res.send(response.data);
             } catch (err) {
-                console.error("Azure TTS error:", err.response?.data || err.message);
-                return res.status(err.response?.status || 500).json({ error: "Azure TTS failed", details: err.message });
+                console.error("Azure TTS error:", err.response ? .data || err.message);
+                return res.status(err.response ? .status || 500).json({ error: "Azure TTS failed", details: err.message });
             }
-        }
-        else if (service === "userList") {
+        } else if (service === "userList") {
             // aggiungi timeSession dal body (stringa 'HH:MM:SS')
-            const { chatbotID, userID, userName, userScore,
-                historique, rapport, usergroup, timeSession } = req.body;
+            const {
+                chatbotID,
+                userID,
+                userName,
+                userScore,
+                historique,
+                rapport,
+                usergroup,
+                timeSession
+            } = req.body;
 
             try {
                 const result = await pool.query(
                     `INSERT INTO userlist (chatbot_name, user_email, name, score, chat_history, chat_analysis, usergroup, timesession)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::interval)
-                    RETURNING *`,
-                    [
+                    RETURNING *`, [
                         chatbotID,
                         userID,
                         userName,
@@ -1480,9 +1482,7 @@ app.post("/api/:service", upload.none(), async (req, res) => {
                     .header("Access-Control-Allow-Headers", "Content-Type")
                     .json({ error: err.message });
             }
-        }
-
-        else if (service === "updateUserGroup") {
+        } else if (service === "updateUserGroup") {
             const { userID, usergroup } = req.body;
             try {
                 console.log("=== AGGIORNAMENTO GRUPPO UTENTE ===");
@@ -1490,8 +1490,7 @@ app.post("/api/:service", upload.none(), async (req, res) => {
                 console.log("Nuovo gruppo:", usergroup);
 
                 const result = await pool.query(
-                    "UPDATE userlist SET usergroup = $1 WHERE user_email = $2",
-                    [usergroup, userID]
+                    "UPDATE userlist SET usergroup = $1 WHERE user_email = $2", [usergroup, userID]
                 );
 
                 console.log("Record aggiornati:", result.rowCount);
@@ -1516,9 +1515,7 @@ app.post("/api/:service", upload.none(), async (req, res) => {
                     .header("Access-Control-Allow-Headers", "Content-Type")
                     .json({ error: err.message });
             }
-        }
-
-        else if (service === "updateUserReview") {
+        } else if (service === "updateUserReview") {
             const { userID, stars, review } = req.body;
 
             try {
@@ -1531,8 +1528,7 @@ app.post("/api/:service", upload.none(), async (req, res) => {
                     ORDER BY created_at DESC NULLS LAST, id DESC
                     LIMIT 1
                     )
-                    RETURNING *`,
-                    [stars, review, userID]
+                    RETURNING *`, [stars, review, userID]
                 );
 
                 return res
@@ -1557,17 +1553,14 @@ app.post("/api/:service", upload.none(), async (req, res) => {
                 error: "Use WebSocket for Azure Realtime",
                 websocket_endpoint: "/api/fullCustomRealtimeAzureOpenAI"
             });
-        }
-        else if (service === "elevenlabs-tts") {
+        } else if (service === "elevenlabs-tts") {
             // La Realtime richiede WebSocket, non HTTP POST.
             // Questo endpoint serve solo a dare un errore chiaro al client HTTP.
             return res.status(426).json({
                 error: "Use WebSocket for elevenlabs tts",
                 websocket_endpoint: "/api/elevenlabs-tts"
             });
-        }
-
-        else if (service === "elevenlabs-tts-CREPS") {
+        } else if (service === "elevenlabs-tts-CREPS") {
             // La Realtime richiede WebSocket, non HTTP POST.
             // Questo endpoint serve solo a dare un errore chiaro al client HTTP.
             return res.status(426).json({
@@ -1587,10 +1580,7 @@ app.post("/api/:service", upload.none(), async (req, res) => {
             if (!voiceId) return res.status(400).json({ error: "Not supported language" });
             const apiUrl = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`;
             try {
-                const response = await axios.post(apiUrl,
-                    { text, model_id: "eleven_flash_v2_5", voice_settings: { stability: 0.6, similarity_boost: 0.7, style: 0.1 } },
-                    { headers: { "xi-api-key": apiKey, "Content-Type": "application/json" }, responseType: "arraybuffer" }
-                );
+                const response = await axios.post(apiUrl, { text, model_id: "eleven_flash_v2_5", voice_settings: { stability: 0.6, similarity_boost: 0.7, style: 0.1 } }, { headers: { "xi-api-key": apiKey, "Content-Type": "application/json" }, responseType: "arraybuffer" });
                 console.log("Audio received from ElevenLabs!");
                 res.setHeader("Content-Type", "audio/mpeg");
                 return res.send(response.data);
@@ -1611,11 +1601,11 @@ app.post("/api/:service", upload.none(), async (req, res) => {
             return res.status(400).json({ error: "Invalid service" });
         }
     } catch (error) {
-        const status = error?.response?.status || 500;
-        const headers = error?.response?.headers || {};
+        const status = error ? .response ? .status || 500;
+        const headers = error ? .response ? .headers || {};
         const requestId = headers["x-requestid"] || headers["x-ms-requestid"] || "";
 
-        let details = error?.response?.data;
+        let details = error ? .response ? .data;
         if (Buffer.isBuffer(details)) {
             try { details = details.toString("utf8"); } catch { details = "<buffer>"; }
         } else if (typeof details === "object") {
@@ -1641,19 +1631,18 @@ app.post("/api/:service", upload.none(), async (req, res) => {
 });
 
 // Secure endpoint to obtain Azure Speech token
-app.get("/get-azure-token", async (req, res) => {
+app.get("/get-azure-token", async(req, res) => {
     const apiKey = process.env.AZURE_SPEECH_API_KEY;
     const region = process.env.AZURE_REGION_AI_SERVICES;
     if (!apiKey || !region) return res.status(500).json({ error: "Azure keys missing in the backend" });
     try {
         const tokenRes = await axios.post(
             `https://${region}.api.cognitive.microsoft.com/sts/v1.0/issueToken`,
-            null,
-            { headers: { "Ocp-Apim-Subscription-Key": apiKey } }
+            null, { headers: { "Ocp-Apim-Subscription-Key": apiKey } }
         );
         res.json({ token: tokenRes.data, region });
     } catch (err) {
-        console.error("Failed to generate Azure token:", err.response?.data || err.message);
+        console.error("Failed to generate Azure token:", err.response ? .data || err.message);
         res.status(500).json({ error: "Failed to generate token" });
     }
 });
@@ -1661,57 +1650,57 @@ app.get("/get-azure-token", async (req, res) => {
 // ------------------ start heygen ----------------------
 
 // === HEYGEN: Streaming token (client -> server -> HeyGen) ===
-app.get("/api/heygen/streaming-token", async (req, res) => {
+app.get("/api/heygen/streaming-token", async(req, res) => {
     try {
         const r = await heygen.post("/v1/streaming.create_token");
-        const token = r.data?.data?.token;
+        const token = r.data ? .data ? .token;
         if (!token) return res.status(502).json({ error: "No token from HeyGen" });
         res.json({ token });
     } catch (e) {
-        const status = e?.response?.status || 500;
-        return res.status(status).json({ error: "HeyGen token error", details: e?.response?.data || e.message });
+        const status = e ? .response ? .status || 500;
+        return res.status(status).json({ error: "HeyGen token error", details: e ? .response ? .data || e.message });
     }
 });
 
 // === HEYGEN: Lista streaming avatars (per UI di scelta) ===
-app.get("/api/heygen/streaming/avatars", async (req, res) => {
+app.get("/api/heygen/streaming/avatars", async(req, res) => {
     try {
         const r = await heygen.get("/v1/streaming/avatar.list");
         res.json(r.data);
     } catch (e) {
-        res.status(e?.response?.status || 500).json({ error: "HeyGen avatars error", details: e?.response?.data || e.message });
+        res.status(e ? .response ? .status || 500).json({ error: "HeyGen avatars error", details: e ? .response ? .data || e.message });
     }
 });
 
 // === HEYGEN: Lista voices (v2) ===
-app.get("/api/heygen/voices", async (req, res) => {
+app.get("/api/heygen/voices", async(req, res) => {
     try {
         const r = await heygen.get("/v2/voices");
         res.json(r.data);
     } catch (e) {
-        res.status(e?.response?.status || 500).json({ error: "HeyGen voices error", details: e?.response?.data || e.message });
+        res.status(e ? .response ? .status || 500).json({ error: "HeyGen voices error", details: e ? .response ? .data || e.message });
     }
 });
 
 // === HEYGEN: Lista avatars (v2) ===
-app.get("/api/heygen/avatars", async (req, res) => {
+app.get("/api/heygen/avatars", async(req, res) => {
     try {
         const r = await heygen.get("/v2/avatars");
         res.json(r.data);
     } catch (e) {
-        res.status(e?.response?.status || 500).json({ error: "HeyGen avatars v2 error", details: e?.response?.data || e.message });
+        res.status(e ? .response ? .status || 500).json({ error: "HeyGen avatars v2 error", details: e ? .response ? .data || e.message });
     }
 });
 
 // === HEYGEN: Generazione video (v2) ===
-app.post("/api/heygen/video/generate", async (req, res) => {
+app.post("/api/heygen/video/generate", async(req, res) => {
     const {
         avatar_id = process.env.HEYGEN_DEFAULT_AVATAR_ID || "default",
-        voice_id = process.env.HEYGEN_DEFAULT_VOICE_ID,
-        text,
-        language = process.env.HEYGEN_DEFAULT_LANG || "fr",
-        ratio = "16:9",        // opzionale: "16:9" | "9:16" | "1:1"
-        background = "green_screen" // o "transparent" (dipende dal piano) / "office" / ecc.
+            voice_id = process.env.HEYGEN_DEFAULT_VOICE_ID,
+            text,
+            language = process.env.HEYGEN_DEFAULT_LANG || "fr",
+            ratio = "16:9", // opzionale: "16:9" | "9:16" | "1:1"
+            background = "green_screen" // o "transparent" (dipende dal piano) / "office" / ecc.
     } = req.body || {};
 
     if (!text) return res.status(400).json({ error: "text is required" });
@@ -1728,53 +1717,53 @@ app.post("/api/heygen/video/generate", async (req, res) => {
         // risposta contiene data.video_id
         res.json(r.data);
     } catch (e) {
-        res.status(e?.response?.status || 500).json({ error: "HeyGen video generate error", details: e?.response?.data || e.message });
+        res.status(e ? .response ? .status || 500).json({ error: "HeyGen video generate error", details: e ? .response ? .data || e.message });
     }
 });
 
 // === HEYGEN: LiveKit v2 endpoints (proxy sicuro) ===
-app.post("/api/heygen/streaming/new", async (req, res) => {
+app.post("/api/heygen/streaming/new", async(req, res) => {
     try {
         const { avatar_id, voice_id, language = "fr", version = "v2" } = req.body || {};
         const r = await heygen.post("/v1/streaming.new", { version, avatar_id, voice_id, language, background: "transparent" });
-        res.json(r.data?.data || r.data);
+        res.json(r.data ? .data || r.data);
     } catch (e) {
-        res.status(e?.response?.status || 500).json({ error: "HeyGen streaming.new error", details: e?.response?.data || e.message });
+        res.status(e ? .response ? .status || 500).json({ error: "HeyGen streaming.new error", details: e ? .response ? .data || e.message });
     }
 });
 
-app.post("/api/heygen/streaming/start", async (req, res) => {
+app.post("/api/heygen/streaming/start", async(req, res) => {
     try {
         const { session_id } = req.body || {};
         const r = await heygen.post("/v1/streaming.start", { session_id });
-        res.json(r.data?.data || r.data);
+        res.json(r.data ? .data || r.data);
     } catch (e) {
-        res.status(e?.response?.status || 500).json({ error: "HeyGen streaming.start error", details: e?.response?.data || e.message });
+        res.status(e ? .response ? .status || 500).json({ error: "HeyGen streaming.start error", details: e ? .response ? .data || e.message });
     }
 });
 
-app.post("/api/heygen/streaming/task", async (req, res) => {
+app.post("/api/heygen/streaming/task", async(req, res) => {
     try {
         const { session_id, text, task_type = "talk" } = req.body || {};
         const r = await heygen.post("/v1/streaming.task", { session_id, text, task_type });
-        res.json(r.data?.data || r.data);
+        res.json(r.data ? .data || r.data);
     } catch (e) {
-        res.status(e?.response?.status || 500).json({ error: "HeyGen streaming.task error", details: e?.response?.data || e.message });
+        res.status(e ? .response ? .status || 500).json({ error: "HeyGen streaming.task error", details: e ? .response ? .data || e.message });
     }
 });
 
-app.post("/api/heygen/streaming/stop", async (req, res) => {
+app.post("/api/heygen/streaming/stop", async(req, res) => {
     try {
         const { session_id } = req.body || {};
         const r = await heygen.post("/v1/streaming.stop", { session_id });
-        res.json(r.data?.data || r.data);
+        res.json(r.data ? .data || r.data);
     } catch (e) {
-        res.status(e?.response?.status || 500).json({ error: "HeyGen streaming.stop error", details: e?.response?.data || e.message });
+        res.status(e ? .response ? .status || 500).json({ error: "HeyGen streaming.stop error", details: e ? .response ? .data || e.message });
     }
 });
 
 // === HEYGEN: Stato video (polling) ===
-app.get("/api/heygen/video/status", async (req, res) => {
+app.get("/api/heygen/video/status", async(req, res) => {
     const { video_id } = req.query;
     if (!video_id) return res.status(400).json({ error: "video_id is required" });
     try {
@@ -1782,7 +1771,7 @@ app.get("/api/heygen/video/status", async (req, res) => {
         const r = await heygen.get("/v1/video_status.get", { params: { video_id } });
         res.json(r.data);
     } catch (e) {
-        res.status(e?.response?.status || 500).json({ error: "HeyGen video status error", details: e?.response?.data || e.message });
+        res.status(e ? .response ? .status || 500).json({ error: "HeyGen video status error", details: e ? .response ? .data || e.message });
     }
 });
 
@@ -1799,6 +1788,7 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ noServer: true });
 const wssEl = new WebSocket.Server({ noServer: true });
 const wssAzureTTS = new WebSocket.Server({ noServer: true });
+const wssOpenAITTS = new WebSocket.Server({ noServer: true });
 
 // ✅ Router unico per gli upgrade WS
 server.on("upgrade", (req, socket, head) => {
@@ -1806,7 +1796,7 @@ server.on("upgrade", (req, socket, head) => {
     try {
         const url = new URL(req.url, `http://${req.headers.host}`);
         pathname = url.pathname;
-    } catch { }
+    } catch {}
 
     if (pathname === "/api/fullCustomRealtimeAzureOpenAI") {
         wss.handleUpgrade(req, socket, head, (ws) => {
@@ -1822,9 +1812,15 @@ server.on("upgrade", (req, socket, head) => {
         return;
     }
 
-    if (pathname === "/api/azure-tts-ws") {                // 👈 nuovo
+    if (pathname === "/api/azure-tts-ws") { // 👈 nuovo
         wssAzureTTS.handleUpgrade(req, socket, head, (ws) => {
             wssAzureTTS.emit("connection", ws, req);
+        });
+        return;
+    }
+    if (pathname === "/api/openai-tts-ws") {
+        wssOpenAITTS.handleUpgrade(req, socket, head, (ws) => {
+            wssOpenAITTS.emit("connection", ws, req);
         });
         return;
     }
@@ -1851,7 +1847,7 @@ function parseElVS(b64) {
         if (raw.use_speaker_boost !== undefined) out.use_speaker_boost = !!raw.use_speaker_boost;
         return Object.keys(out).length ? out : null;
     } catch (e) {
-        console.warn("[Realtime] invalid el_vs:", e?.message || e);
+        console.warn("[Realtime] invalid el_vs:", e ? .message || e);
         return null;
     }
 }
@@ -1861,8 +1857,8 @@ function buildSSMLv2({ text, voice, style, styleDegree, rate, pitch }) {
     const v = voice || "fr-FR-RemyMultilingualNeural";
     const locale = v.substring(0, 5);
     const safe = escapeXml(text || "");
-    const prosody = (rate || pitch)
-        ? `<prosody${rate ? ` rate="${rate}"` : ""}${pitch ? ` pitch="${pitch}"` : ""}>${safe}</prosody>`
+    const prosody = (rate || pitch) ?
+        `<prosody${rate ? ` rate="${rate}"` : ""}${pitch ? ` pitch="${pitch}"` : ""}>${safe}</prosody>`
         : safe;
     const body = style
         ? `<mstts:express-as style="${style}"${styleDegree ? ` styledegree="${styleDegree}"` : ""}>${prosody}</mstts:express-as>`
@@ -1873,6 +1869,156 @@ function buildSSMLv2({ text, voice, style, styleDegree, rate, pitch }) {
   <voice name="${v}">${body}</voice>
 </speak>`.trim();
 }
+
+const OPENAI_TTS_MODEL = "gpt-4o-mini-tts-2025-03-20";
+const OPENAI_TTS_KEY = process.env.OPENAI_API_KEY_SIMULATEUR; // o la tua key per TTS
+
+const OPENAI_TTS_URL = "https://api.openai.com/v1/audio/speech";
+const OPENAI_ALLOWED_VOICES = new Set([
+    "alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse", "marin", "cedar"
+]);
+
+wssOpenAITTS.on("connection", (ws, req) => {
+    if (!OPENAI_TTS_KEY) {
+        try { ws.close(1011, "Missing OPENAI_API_KEY_SIMULATEUR"); } catch { }
+        return;
+    }
+
+    const urlObj = new URL(req.url, `http://${req.headers.host}`);
+    const qVoice = (urlObj.searchParams.get("voice") || "coral").toLowerCase();
+    const baseVoice = OPENAI_ALLOWED_VOICES.has(qVoice) ? qVoice : "coral";
+
+    let closed = false;
+    let busy = false;
+    const queue = [];       // jobs: { text, voice, instructions }
+    let wantFlush = false;
+
+    let abortController = null;
+    let activeStream = null;
+
+    const cleanupActive = () => {
+        try { activeStream?.destroy?.(); } catch { }
+        activeStream = null;
+        try { abortController?.abort?.(); } catch { }
+        abortController = null;
+    };
+
+    const maybeFinish = () => {
+        if (closed) return;
+        if (!busy && wantFlush && queue.length === 0) {
+            try { ws.send(JSON.stringify({ done: true })); } catch { }
+            try { ws.close(1000, "done"); } catch { }
+        }
+    };
+
+    const runNext = async () => {
+        if (closed || busy) return;
+        if (queue.length === 0) return maybeFinish();
+
+        busy = true;
+        const job = queue.shift();
+        const voice = OPENAI_ALLOWED_VOICES.has((job.voice || "").toLowerCase())
+            ? job.voice.toLowerCase()
+            : baseVoice;
+
+        abortController = new AbortController();
+
+        const payload = {
+            model: OPENAI_TTS_MODEL,
+            voice,
+            input: job.text,
+            response_format: "pcm", // PCM raw: 24kHz 16-bit LE :contentReference[oaicite:1]{index=1}
+            ...(job.instructions ? { instructions: job.instructions } : {}),
+        };
+
+        try {
+            const resp = await axios.post(OPENAI_TTS_URL, payload, {
+                headers: {
+                    Authorization: `Bearer ${OPENAI_TTS_KEY}`,
+                    "Content-Type": "application/json",
+                },
+                responseType: "stream",
+                signal: abortController.signal,
+                timeout: API_TIMEOUT,
+            });
+
+            activeStream = resp.data;
+
+            resp.data.on("data", (chunk) => {
+                if (closed) return;
+                // invia chunk PCM come base64 (compatibile col tuo PcmStreamer)
+                try {
+                    ws.send(JSON.stringify({ audio: Buffer.from(chunk).toString("base64") }));
+                } catch { }
+            });
+
+            resp.data.on("end", () => {
+                cleanupActive();
+                busy = false;
+                runNext();
+            });
+
+            resp.data.on("error", (err) => {
+                const msg = err?.message || String(err);
+                cleanupActive();
+                busy = false;
+                if (!closed) {
+                    try { ws.send(JSON.stringify({ error: "openai_tts_stream_error", details: msg })); } catch { }
+                }
+                runNext();
+            });
+
+        } catch (err) {
+            const msg = err?.response?.data || err?.message || String(err);
+            cleanupActive();
+            busy = false;
+            if (!closed) {
+                try { ws.send(JSON.stringify({ error: "openai_tts_request_failed", details: msg })); } catch { }
+            }
+            runNext();
+        }
+    };
+
+    ws.on("message", (data) => {
+        let msg;
+        try { msg = JSON.parse(data.toString()); } catch { return; }
+
+        if (typeof msg.text === "string" && msg.text.trim()) {
+            queue.push({
+                text: msg.text,
+                voice: msg.voice || baseVoice,
+                instructions: msg.instructions || null,
+            });
+            runNext();
+            return;
+        }
+
+        if (msg.flush) {
+            wantFlush = true;
+            maybeFinish();
+            return;
+        }
+
+        if (msg.cancel) {
+            // stop immediato del job corrente + svuota coda
+            queue.length = 0;
+            wantFlush = true;
+            cleanupActive();
+            busy = false;
+            maybeFinish();
+        }
+    });
+
+    const closeAll = () => {
+        closed = true;
+        cleanupActive();
+        queue.length = 0;
+    };
+
+    ws.on("close", closeAll);
+    ws.on("error", closeAll);
+});
+
 
 wssAzureTTS.on("connection", (ws, req) => {
     if (!AZ_TTS_KEY || !AZ_TTS_REGION) {
