@@ -72,10 +72,10 @@ function createSynthesizerForFormat(format) {
         const conn = sdk.Connection.fromSpeechSynthesizer(synthesizer);
         conn.openConnectionAsync(
             () => { /* warm ok */ },
-            (err) => { console.warn("openConnectionAsync failed:", err ? .message || err); }
+            (err) => { console.warn("openConnectionAsync failed:", err ?.message || err); }
         );
     } catch (e) {
-        console.warn("Connection warmup failed:", e ? .message || e);
+        console.warn("Connection warmup failed:", e ?.message || e);
     }
 
     // Un "worker" incapsula un synthesizer riutilizzabile, con coda jobs
@@ -174,7 +174,7 @@ function runNextJob(worker, format) {
     const onSynthesizing = (_s, e) => {
         try {
             if (clientAborted) return;
-            const bytes = e ? .result ? .audioData;
+            const bytes = e ?.result ?.audioData;
             if (bytes && bytes.byteLength) {
                 if (!started) {
                     sendHeadersOnce();
@@ -208,7 +208,7 @@ function runNextJob(worker, format) {
     const onCanceled = (_s, e) => {
         clearTimeout(watchdog);
         cleanupHandlers();
-        const details = e ? .errorDetails || "synthesis canceled";
+        const details = e ?.errorDetails || "synthesis canceled";
         retireAndReplaceWorker(worker, format);
         if (!res.headersSent && !clientAborted) {
             try { res.status(502).json({ error: "Azure TTS canceled", details }); } catch {}
@@ -345,8 +345,8 @@ const REQUIRE_TIMER_ID = true;
 function getTimerId(req) {
     // SOLO variabile "timer_chatbot_id" (body / query / header)
     return (
-        req.body ? .timer_chatbot_id ||
-        req.query ? .timer_chatbot_id ||
+        req.body ?.timer_chatbot_id ||
+        req.query ?.timer_chatbot_id ||
         req.get("x-timer-chatbot-id") ||
         ""
     ).toString().trim();
@@ -435,7 +435,7 @@ async function streamAssistant(assistantId, messages, userId, res) {
         thread.id, { assistant_id: assistantId, stream: true, user: userId }
     );
     for await (const event of run) {
-        const delta = event.data ? .delta ? .content;
+        const delta = event.data ?.delta ?.content;
         if (delta) res.write(`data: ${JSON.stringify({ delta })}\n\n`);
     }
     res.write("data: [DONE]\n\n");
@@ -461,7 +461,7 @@ function buildSSML({ text, voice }) {
 
 // Whisper transcription endpoint
 app.post("/api/transcribe", upload.single("audio"), async(req, res) => {
-    console.log("🔹 /api/transcribe, req.file:", req.file ? .originalname, req.file ? .size);
+    console.log("🔹 /api/transcribe, req.file:", req.file ?.originalname, req.file ?.size);
     const apiKey = process.env.OPENAI_API_KEY_SIMULATEUR;
     if (!apiKey) return res.status(500).json({ error: "OpenAI API key missing" });
     if (!req.file) return res.status(400).json({ error: "No audio file uploaded" });
@@ -476,9 +476,9 @@ app.post("/api/transcribe", upload.single("audio"), async(req, res) => {
         console.log("🎉 Whisper response:", response.data);
         return res.json(response.data);
     } catch (err) {
-        const details = err.response ? .data || err.message;
+        const details = err.response ?.data || err.message;
         console.error("❌ Whisper transcription error details:", details);
-        return res.status(err.response ? .status || 500)
+        return res.status(err.response ?.status || 500)
             .json({ error: "Transcription failed", details });
     }
 });
@@ -532,18 +532,18 @@ app.post("/api/:service", upload.none(), async(req, res) => {
                 });
                 axiosResp.data.on("end", () => res.end());
                 axiosResp.data.on("error", (e) => {
-                    console.error("Azure SSE stream error:", e ? .message || e);
+                    console.error("Azure SSE stream error:", e ?.message || e);
                     res.write(`data: ${JSON.stringify({ error: true, message: "stream_error", details: String(e) })}\n\n`);
                     res.write("data: [DONE]\n\n");
                     res.end();
                 });
 
             } catch (err) {
-                const status = err ? .response ? .status || 500;
-                const headers = err ? .response ? .headers || {};
+                const status = err ?.response ?.status || 500;
+                const headers = err ?.response ?.headers || {};
                 const requestId = headers["x-request-id"] || headers["x-ms-request-id"] || headers["apim-request-id"] || "";
 
-                let body = err ? .response ? .data;
+                let body = err ?.response ?.data;
                 if (Buffer.isBuffer(body)) { try { body = body.toString("utf8"); } catch { body = "<buffer>"; } }
                 if (typeof body === "object") { try { body = JSON.stringify(body); } catch {} }
 
@@ -586,8 +586,8 @@ app.post("/api/:service", upload.none(), async(req, res) => {
 
                 // Estraggo il testo in modo robusto (stringa o array di parti)
                 let content = "";
-                const choice = data ? .choices ? .[0];
-                if (choice ? .message ? .content) {
+                const choice = data ?.choices ?.[0];
+                if (choice ?.message ?.content) {
                     content = Array.isArray(choice.message.content) ?
                         choice.message.content.filter(p => p.type === "text").map(p => p.text).join("") :
                         String(choice.message.content);
@@ -595,10 +595,10 @@ app.post("/api/:service", upload.none(), async(req, res) => {
 
                 return res.status(200).json({ ok: true, content, raw: data });
             } catch (err) {
-                const status = err ? .response ? .status || 500;
-                const headers = err ? .response ? .headers || {};
+                const status = err ?.response ?.status || 500;
+                const headers = err ?.response ?.headers || {};
                 const requestId = headers["x-request-id"] || headers["x-ms-request-id"] || headers["apim-request-id"] || "";
-                let details = err ? .response ? .data;
+                let details = err ?.response ?.data;
 
                 try {
                     if (Buffer.isBuffer(details)) details = details.toString("utf8");
@@ -661,8 +661,8 @@ app.post("/api/:service", upload.none(), async(req, res) => {
                 }
 
                 let content = "";
-                const choice = data ? .choices ? .[0];
-                if (choice ? .message ? .content) {
+                const choice = data ?.choices ?.[0];
+                if (choice ?.message ?.content) {
                     content = Array.isArray(choice.message.content) ?
                         choice.message.content.filter(p => p.type === "text").map(p => p.text).join("") :
                         String(choice.message.content);
@@ -670,10 +670,10 @@ app.post("/api/:service", upload.none(), async(req, res) => {
 
                 return res.status(200).json({ ok: true, content, raw: data });
             } catch (err) {
-                const status = err ? .response ? .status || 500;
-                const headers = err ? .response ? .headers || {};
+                const status = err ?.response ?.status || 500;
+                const headers = err ?.response ?.headers || {};
                 const requestId = headers["x-request-id"] || headers["x-ms-request-id"] || headers["apim-request-id"] || "";
-                let details = err ? .response ? .data;
+                let details = err ?.response ?.data;
                 try { if (Buffer.isBuffer(details)) details = details.toString("utf8"); } catch {}
 
                 return res.status(status).json({
@@ -702,7 +702,7 @@ app.post("/api/:service", upload.none(), async(req, res) => {
                         ...request,
                         generationConfig: { maxOutputTokens: 2048 }
                     });
-                    const text = result.response ? .candidates ? .[0] ? .content ? .parts ? .[0] ? .text || "";
+                    const text = result.response ?.candidates ?.[0] ?.content ?.parts ?.[0] ?.text || "";
                     return res.json({ text });
                 } catch (err) {
                     console.error("Vertex AI batch error:", err);
@@ -717,7 +717,7 @@ app.post("/api/:service", upload.none(), async(req, res) => {
                 res.flushHeaders();
                 const result = await vertexModel.generateContentStream(request);
                 for await (const item of result.stream) {
-                    const delta = item.candidates ? .[0] ? .content ? .parts ? .[0] ? .text;
+                    const delta = item.candidates ?.[0] ?.content ?.parts ?.[0] ?.text;
                     if (delta) res.write(`data: ${JSON.stringify({ delta })}\n\n`);
                 }
                 res.write("data: [DONE]\n\n");
@@ -762,7 +762,7 @@ app.post("/api/:service", upload.none(), async(req, res) => {
                     let userIdNum = userIdHdr ? Number(userIdHdr) : null;
                     if (!userIdNum && userEmailHdr) {
                         const rUid = await pool.query("SELECT id FROM users WHERE user_mail = $1", [userEmailHdr]);
-                        userIdNum = rUid.rows[0] ? .id || null;
+                        userIdNum = rUid.rows[0] ?.id || null;
                     }
 
                     let rKey;
@@ -802,7 +802,7 @@ app.post("/api/:service", upload.none(), async(req, res) => {
                     stream: true
                 });
                 for await (const part of stream) {
-                    const delta = part.choices ? .[0] ? .delta ? .content;
+                    const delta = part.choices ?.[0] ?.delta ?.content;
                     if (delta) res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: delta } }] })}\n\n`);
                 }
                 res.write("data: [DONE]\n\n");
@@ -912,11 +912,11 @@ app.post("/api/:service", upload.none(), async(req, res) => {
                             })}\n\n`);
                         }
                     } else if (t === "response.completed") {
-                        usageSnapshot = event.response ? .usage || null;
+                        usageSnapshot = event.response ?.usage || null;
                         const totalTokens =
-                            (usageSnapshot ? .total_tokens !== undefined ?
+                            (usageSnapshot ?.total_tokens !== undefined ?
                                 usageSnapshot.total_tokens :
-                                ((usageSnapshot ? .input_tokens || 0) + (usageSnapshot ? .output_tokens || 0)));
+                                ((usageSnapshot ?.input_tokens || 0) + (usageSnapshot ?.output_tokens || 0)));
 
                         res.write(`data: ${JSON.stringify({ usage: { total_tokens: totalTokens } })}\n\n`);
                     } else if (t === "response.error") {
@@ -947,12 +947,12 @@ app.post("/api/:service", upload.none(), async(req, res) => {
                 stream: true
             });
             for await (const part of stream) {
-                const delta = part.choices ? .[0] ? .delta ? .content;
+                const delta = part.choices ?.[0] ?.delta ?.content;
                 if (delta) {
                     res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: delta } }] })}\n\n`);
                 }
             }
-            const totalTokens = stream.usage ? .total_tokens || 0;
+            const totalTokens = stream.usage ?.total_tokens || 0;
             res.write(`data: ${JSON.stringify({ usage: { total_tokens: totalTokens } })}\n\n`);
             res.write("data: [DONE]\n\n");
             return res.end();
@@ -1022,11 +1022,11 @@ app.post("/api/:service", upload.none(), async(req, res) => {
                         try { rejectSSETimer(res, tId); } catch {}
                         break;
                     }
-                    const delta = part.choices ? .[0] ? .delta ? .content;
+                    const delta = part.choices ?.[0] ?.delta ?.content;
                     if (delta) res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: delta } }] })}\n\n`);
                 }
 
-                const totalTokens = stream.usage ? .total_tokens || 0;
+                const totalTokens = stream.usage ?.total_tokens || 0;
                 try {
                     res.write(`data: ${JSON.stringify({ usage: { total_tokens: totalTokens } })}\n\n`);
                     res.write("data: [DONE]\n\n");
@@ -1184,8 +1184,8 @@ app.post("/api/:service", upload.none(), async(req, res) => {
                 });
 
             } catch (err) {
-                const status = err ? .response ? .status || 500;
-                let details = err ? .response ? .data;
+                const status = err ?.response ?.status || 500;
+                let details = err ?.response ?.data;
                 try {
                     if (Buffer.isBuffer(details)) details = details.toString("utf8");
                 } catch {}
@@ -1238,24 +1238,24 @@ app.post("/api/:service", upload.none(), async(req, res) => {
 
                 // estrai testo in modo robusto (Azure può dare stringa o array di parti)
                 let content = "";
-                const choice = data ? .choices ? .[0];
-                if (choice ? .message ? .content) {
+                const choice = data ?.choices ?.[0];
+                if (choice ?.message ?.content) {
                     content = Array.isArray(choice.message.content) ?
                         choice.message.content
                         .filter(p => p && (p.type === "text" || typeof p === "string"))
                         .map(p => (typeof p === "string" ? p : (p.text || "")))
                         .join("") :
                         String(choice.message.content);
-                } else if (typeof choice ? .text === "string") {
+                } else if (typeof choice ?.text === "string") {
                     content = choice.text;
                 }
 
                 return res.status(200).json({ ok: true, content, raw: data });
             } catch (err) {
-                const status = err ? .response ? .status || 500;
-                const headers = err ? .response ? .headers || {};
+                const status = err ?.response ?.status || 500;
+                const headers = err ?.response ?.headers || {};
                 const requestId = headers["x-request-id"] || headers["x-ms-request-id"] || headers["apim-request-id"] || "";
-                let details = err ? .response ? .data;
+                let details = err ?.response ?.data;
                 try { if (Buffer.isBuffer(details)) details = details.toString("utf8"); } catch {}
 
                 return res.status(status).json({
@@ -1285,8 +1285,8 @@ app.post("/api/:service", upload.none(), async(req, res) => {
                 res.setHeader("Content-Type", "audio/mpeg");
                 return res.send(response.data);
             } catch (err) {
-                console.error("OpenAI TTS error:", err.response ? .data || err.message);
-                return res.status(err.response ? .status || 500).json({ error: "OpenAI TTS failed", details: err.message });
+                console.error("OpenAI TTS error:", err.response ?.data || err.message);
+                return res.status(err.response ?.status || 500).json({ error: "OpenAI TTS failed", details: err.message });
             }
         } else if (service === "azureTTS-Scaleway") {
             const {
@@ -1337,11 +1337,11 @@ app.post("/api/:service", upload.none(), async(req, res) => {
                 res.setHeader("Content-Type", "audio/mpeg");
                 return res.send(responseTTS.data);
             } catch (err) {
-                const status = err.response ? .status || 500;
-                const headers = err.response ? .headers || {};
+                const status = err.response ?.status || 500;
+                const headers = err.response ?.headers || {};
                 const requestId = headers["x-requestid"] || headers["x-ms-requestid"] || "";
 
-                let textErr = err.response ? .data;
+                let textErr = err.response ?.data;
                 if (Buffer.isBuffer(textErr)) {
                     try { textErr = textErr.toString("utf8"); } catch { textErr = "<buffer>"; }
                 } else if (typeof textErr === "object") {
@@ -1435,8 +1435,8 @@ app.post("/api/:service", upload.none(), async(req, res) => {
                 res.setHeader("Content-Type", "audio/mpeg");
                 return res.send(response.data);
             } catch (err) {
-                console.error("Azure TTS error:", err.response ? .data || err.message);
-                return res.status(err.response ? .status || 500).json({ error: "Azure TTS failed", details: err.message });
+                console.error("Azure TTS error:", err.response ?.data || err.message);
+                return res.status(err.response ?.status || 500).json({ error: "Azure TTS failed", details: err.message });
             }
         } else if (service === "userList") {
             // aggiungi timeSession dal body (stringa 'HH:MM:SS')
@@ -1601,11 +1601,11 @@ app.post("/api/:service", upload.none(), async(req, res) => {
             return res.status(400).json({ error: "Invalid service" });
         }
     } catch (error) {
-        const status = error ? .response ? .status || 500;
-        const headers = error ? .response ? .headers || {};
+        const status = error ?.response ?.status || 500;
+        const headers = error ?.response ?.headers || {};
         const requestId = headers["x-requestid"] || headers["x-ms-requestid"] || "";
 
-        let details = error ? .response ? .data;
+        let details = error ?.response ?.data;
         if (Buffer.isBuffer(details)) {
             try { details = details.toString("utf8"); } catch { details = "<buffer>"; }
         } else if (typeof details === "object") {
@@ -1642,7 +1642,7 @@ app.get("/get-azure-token", async(req, res) => {
         );
         res.json({ token: tokenRes.data, region });
     } catch (err) {
-        console.error("Failed to generate Azure token:", err.response ? .data || err.message);
+        console.error("Failed to generate Azure token:", err.response ?.data || err.message);
         res.status(500).json({ error: "Failed to generate token" });
     }
 });
@@ -1653,12 +1653,12 @@ app.get("/get-azure-token", async(req, res) => {
 app.get("/api/heygen/streaming-token", async(req, res) => {
     try {
         const r = await heygen.post("/v1/streaming.create_token");
-        const token = r.data ? .data ? .token;
+        const token = r.data ?.data ?.token;
         if (!token) return res.status(502).json({ error: "No token from HeyGen" });
         res.json({ token });
     } catch (e) {
-        const status = e ? .response ? .status || 500;
-        return res.status(status).json({ error: "HeyGen token error", details: e ? .response ? .data || e.message });
+        const status = e ?.response ?.status || 500;
+        return res.status(status).json({ error: "HeyGen token error", details: e ?.response ?.data || e.message });
     }
 });
 
@@ -1668,7 +1668,7 @@ app.get("/api/heygen/streaming/avatars", async(req, res) => {
         const r = await heygen.get("/v1/streaming/avatar.list");
         res.json(r.data);
     } catch (e) {
-        res.status(e ? .response ? .status || 500).json({ error: "HeyGen avatars error", details: e ? .response ? .data || e.message });
+        res.status(e ?.response ?.status || 500).json({ error: "HeyGen avatars error", details: e ?.response ?.data || e.message });
     }
 });
 
@@ -1678,7 +1678,7 @@ app.get("/api/heygen/voices", async(req, res) => {
         const r = await heygen.get("/v2/voices");
         res.json(r.data);
     } catch (e) {
-        res.status(e ? .response ? .status || 500).json({ error: "HeyGen voices error", details: e ? .response ? .data || e.message });
+        res.status(e ?.response ?.status || 500).json({ error: "HeyGen voices error", details: e ?.response ?.data || e.message });
     }
 });
 
@@ -1688,7 +1688,7 @@ app.get("/api/heygen/avatars", async(req, res) => {
         const r = await heygen.get("/v2/avatars");
         res.json(r.data);
     } catch (e) {
-        res.status(e ? .response ? .status || 500).json({ error: "HeyGen avatars v2 error", details: e ? .response ? .data || e.message });
+        res.status(e ?.response ?.status || 500).json({ error: "HeyGen avatars v2 error", details: e ?.response ?.data || e.message });
     }
 });
 
@@ -1717,7 +1717,7 @@ app.post("/api/heygen/video/generate", async(req, res) => {
         // risposta contiene data.video_id
         res.json(r.data);
     } catch (e) {
-        res.status(e ? .response ? .status || 500).json({ error: "HeyGen video generate error", details: e ? .response ? .data || e.message });
+        res.status(e ?.response ?.status || 500).json({ error: "HeyGen video generate error", details: e ?.response ?.data || e.message });
     }
 });
 
@@ -1726,9 +1726,9 @@ app.post("/api/heygen/streaming/new", async(req, res) => {
     try {
         const { avatar_id, voice_id, language = "fr", version = "v2" } = req.body || {};
         const r = await heygen.post("/v1/streaming.new", { version, avatar_id, voice_id, language, background: "transparent" });
-        res.json(r.data ? .data || r.data);
+        res.json(r.data ?.data || r.data);
     } catch (e) {
-        res.status(e ? .response ? .status || 500).json({ error: "HeyGen streaming.new error", details: e ? .response ? .data || e.message });
+        res.status(e ?.response ?.status || 500).json({ error: "HeyGen streaming.new error", details: e ?.response ?.data || e.message });
     }
 });
 
@@ -1736,9 +1736,9 @@ app.post("/api/heygen/streaming/start", async(req, res) => {
     try {
         const { session_id } = req.body || {};
         const r = await heygen.post("/v1/streaming.start", { session_id });
-        res.json(r.data ? .data || r.data);
+        res.json(r.data ?.data || r.data);
     } catch (e) {
-        res.status(e ? .response ? .status || 500).json({ error: "HeyGen streaming.start error", details: e ? .response ? .data || e.message });
+        res.status(e ?.response ?.status || 500).json({ error: "HeyGen streaming.start error", details: e ?.response ?.data || e.message });
     }
 });
 
@@ -1746,9 +1746,9 @@ app.post("/api/heygen/streaming/task", async(req, res) => {
     try {
         const { session_id, text, task_type = "talk" } = req.body || {};
         const r = await heygen.post("/v1/streaming.task", { session_id, text, task_type });
-        res.json(r.data ? .data || r.data);
+        res.json(r.data ?.data || r.data);
     } catch (e) {
-        res.status(e ? .response ? .status || 500).json({ error: "HeyGen streaming.task error", details: e ? .response ? .data || e.message });
+        res.status(e ?.response ?.status || 500).json({ error: "HeyGen streaming.task error", details: e ?.response ?.data || e.message });
     }
 });
 
@@ -1756,9 +1756,9 @@ app.post("/api/heygen/streaming/stop", async(req, res) => {
     try {
         const { session_id } = req.body || {};
         const r = await heygen.post("/v1/streaming.stop", { session_id });
-        res.json(r.data ? .data || r.data);
+        res.json(r.data ?.data || r.data);
     } catch (e) {
-        res.status(e ? .response ? .status || 500).json({ error: "HeyGen streaming.stop error", details: e ? .response ? .data || e.message });
+        res.status(e ?.response ?.status || 500).json({ error: "HeyGen streaming.stop error", details: e ?.response ?.data || e.message });
     }
 });
 
@@ -1771,7 +1771,7 @@ app.get("/api/heygen/video/status", async(req, res) => {
         const r = await heygen.get("/v1/video_status.get", { params: { video_id } });
         res.json(r.data);
     } catch (e) {
-        res.status(e ? .response ? .status || 500).json({ error: "HeyGen video status error", details: e ? .response ? .data || e.message });
+        res.status(e ?.response ?.status || 500).json({ error: "HeyGen video status error", details: e ?.response ?.data || e.message });
     }
 });
 
@@ -1851,7 +1851,7 @@ function parseElVS(b64) {
         if (raw.use_speaker_boost !== undefined) out.use_speaker_boost = !!raw.use_speaker_boost;
         return Object.keys(out).length ? out : null;
     } catch (e) {
-        console.warn("[Realtime] invalid el_vs:", e ? .message || e);
+        console.warn("[Realtime] invalid el_vs:", e ?.message || e);
         return null;
     }
 }
