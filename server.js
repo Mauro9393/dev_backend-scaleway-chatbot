@@ -1798,6 +1798,9 @@ server.on("upgrade", (req, socket, head) => {
         pathname = url.pathname;
     } catch {}
 
+    pathname = pathname.replace(/\/+$/, ""); // <-- toglie slash finali
+    if (pathname === "") pathname = "/";
+
     if (pathname === "/api/fullCustomRealtimeAzureOpenAI") {
         wss.handleUpgrade(req, socket, head, (ws) => {
             wss.emit("connection", ws, req);
@@ -1824,6 +1827,7 @@ server.on("upgrade", (req, socket, head) => {
         });
         return;
     }
+    console.log("UPGRADE req.url =", req.url, " pathname =", pathname);
 
     // path sconosciuto → chiudi
     socket.destroy();
